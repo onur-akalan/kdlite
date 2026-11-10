@@ -512,6 +512,15 @@ fn cmd_place(mode: &str, paths: &[PathBuf], port: u16) -> Result<()> {
         }
     };
     let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    if v.get("drive").and_then(|d| d.as_bool()).unwrap_or(false) {
+        let (icon, title, text) = if mode == "both" {
+            ("folder-cloud", tr!("Cloud and this computer"), tr!("{} will also be kept on this computer. Downloading starts now.", what))
+        } else {
+            ("cloudstatus", tr!("Cloud only"), tr!("{} now lives in the cloud only. The downloaded copy was removed; the cloud is unchanged.", what))
+        };
+        notify(icon, &title, &text);
+        return Ok(());
+    }
     let (icon, title, text) = match mode {
         "cloud" => (
             "cloudstatus",

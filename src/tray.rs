@@ -307,15 +307,17 @@ pub fn run(c: Ctx, ui: Arc<Ui>, port: u16, hidden: bool) -> Result<()> {
     // dakikada bir yeniden denenir.
     let c = Arc::new(c);
     let mountpoint = c.cfg.mountpoint();
+    crate::ui::clean_old_mount();
     let session: Arc<Mutex<Option<(fuser::BackgroundSession, Arc<crate::fs::Inner>)>>> = Arc::new(Mutex::new(None));
     {
-        let (c, session) = (c.clone(), session.clone());
+        let (c, session, ui) = (c.clone(), session.clone(), ui.clone());
         std::thread::spawn(move || {
             let mut wait = Duration::from_secs(5);
             loop {
                 if session.lock().unwrap().is_none() {
                     match mount_session(&c) {
                         Ok(s) => {
+                            ui.set_mount(s.1.clone());
                             *session.lock().unwrap() = Some(s);
                             log::info!("kDrive baglandi: {}", c.cfg.mountpoint().display());
                         }

@@ -7,8 +7,30 @@ use crate::fs::Inner;
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
+
+/// Liste degisince indirme dongusunu hemen uyandirir.
+static KICK: (Mutex<bool>, Condvar) = (Mutex::new(false), Condvar::new());
+
+pub fn wake() {
+    *KICK.0.lock().unwrap() = true;
+    KICK.1.notify_all();
+}
+
+/// `path`, listedeki bir yolun kendisi ya da altinda mi; oyleyse o yol.
+pub fn covering<'a>(pins: &'a [String], path: &str) -> Option<&'a String> {
+    pins.iter().find(|p| path == p.as_str() || path.starts_with(&format!("{}/", p)))
+}
+
+/// Bir bulut yolunun altindaki butun dosyalar.
+pub fn files_under(inner: &Inner, path: &str) -> Vec<Entry> {
+    let mut out = Vec::new();
+    if let Ok((ino, entry)) = inner.resolve(path) {
+        collect(inner, ino, entry, &mut out);
+    }
+    out
+}
 
 const INTERVAL: Duration = Duration::from_secs(600);
 /// Diskte bundan az bos yer kalirsa sabitleme indirmeleri durur.
@@ -69,6 +91,9 @@ fn sync_once(inner: &Arc<Inner>) {
         log::info!("sabitleme: {} dosya indirilecek", missing.len());
     }
     for e in missing {
+        if *KICK.0.lock().unwrap() {
+            break; // liste degisti: yeni listeyle bastan
+        }
         if inner.cache.free_space() < MIN_FREE {
             log::warn!("diskte 10 GB'tan az yer kaldi; sabitleme indirmeleri durduruldu");
             break;
@@ -82,6 +107,8 @@ fn sync_once(inner: &Arc<Inner>) {
 pub fn spawn(inner: Arc<Inner>) {
     std::thread::spawn(move || loop {
         sync_once(&inner);
-        std::thread::sleep(INTERVAL);
+        let g = KICK.0.lock().unwrap();
+        let (mut g, _) = KICK.1.wait_timeout_while(g, INTERVAL, |k| !*k).unwrap();
+        *g = false;
     });
 }

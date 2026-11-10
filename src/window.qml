@@ -82,6 +82,7 @@ Window {
     readonly property string badgeIcon: !reachable ? "state-offline" : running ? "state-sync" : paused ? "emblem-pause"
         : anyFailed ? "emblem-warning" : sources.length > 0 ? "emblem-checked" : ""
     readonly property var sources: st && st.sources ? st.sources : []
+    readonly property var drive: st && st.drive ? st.drive : null
     readonly property bool anyFailed: {
         for (var i = 0; i < sources.length; i++) {
             var l = sources[i].last
@@ -134,6 +135,7 @@ Window {
         onAccepted: {
             destDialog.localPath = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
             destDialog.editName = ""
+            destDialog.pinMode = false
             destDialog.stack = []
             destDialog.load()
             destDialog.open()
@@ -145,6 +147,7 @@ Window {
         id: destDialog
         property string localPath: ""
         property string editName: ""   // doluysa: var olan yedegin yeri degistiriliyor
+        property bool pinMode: false   // true: bilgisayarda da tutulacak bulut klasoru seciliyor
         property var stack: []     // girilen bulut klasorleri: [{id, name}]
         property var dirs: []
         property bool loading: false
@@ -156,12 +159,17 @@ Window {
             root.api("/api/cloud" + id, undefined, function(j) { destDialog.dirs = j.dirs; destDialog.loading = false })
         }
         function add(dest) {
+            if (pinMode) {
+                root.api("/api/pin", { paths: [here], on: true }, function() { root.errorText = ""; root.refresh() })
+                close()
+                return
+            }
             var body = editName ? { name: editName } : { path: localPath }
             if (dest !== undefined) body.dest = dest
             root.api(editName ? "/api/edit" : "/api/add", body, function() { root.errorText = ""; root.refresh() })
             close()
         }
-        title: root.t("Where in kDrive should it go?")
+        title: pinMode ? root.t("Which cloud folder should also be kept on this computer?") : root.t("Where in kDrive should it go?")
         modal: true
         parent: QQC.Overlay.overlay
         anchors.centerIn: parent
@@ -172,7 +180,9 @@ Window {
             QQC.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "“" + destDialog.folderName + root.t("”: choose its place in the cloud. The folder is created inside the place you pick, under its own name.")
+                text: destDialog.pinMode
+                      ? root.t("Open the folder you want and press “Keep this folder”. Its files are downloaded and stay available without internet; changes still go to the cloud.")
+                      : "“" + destDialog.folderName + root.t("”: choose its place in the cloud. The folder is created inside the place you pick, under its own name.")
                       + (destDialog.editName ? root.t(" The copy at the old place is not deleted; files are uploaded again to the new place.") : "")
             }
             RowLayout {
@@ -223,18 +233,21 @@ Window {
                 elide: Text.ElideMiddle
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
+                visible: !destDialog.pinMode
                 text: root.t("Destination: ") + (destDialog.here ? destDialog.here + "/" : "") + destDialog.folderName
             }
         }
         footer: QQC.DialogButtonBox {
             QQC.Button {
                 text: root.t("Default place (") + (root.st ? root.st.backup_root : "") + ")"
+                visible: !destDialog.pinMode
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.ActionRole
                 onClicked: destDialog.add(undefined)
             }
             QQC.Button {
-                text: root.t("Back up here")
+                text: destDialog.pinMode ? root.t("Keep this folder") : root.t("Back up here")
                 icon.name: "dialog-ok-apply"
+                enabled: !destDialog.pinMode || destDialog.here.length > 0
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.AcceptRole
                 onClicked: destDialog.add(destDialog.here)
             }
@@ -322,6 +335,7 @@ Window {
                 cacheSpin.value = Math.round(j.cache_max_gb)
                 rescanSpin.value = j.rescan_min
                 rootField.text = j.backup_root
+                mountField.text = root.shortPath(j.mountpoint)
             })
             root.view = "settings"
         }
@@ -333,7 +347,8 @@ Window {
                 autostart: autostartSwitch.checked,
                 cache_max_gb: cacheSpin.value,
                 rescan_min: rescanSpin.value,
-                backup_root: rootField.text
+                backup_root: rootField.text,
+                mountpoint: mountField.text
             }, function() { root.errorText = ""; root.view = "main"; root.refresh() })
         }
         header: QQC.ToolBar {
@@ -392,9 +407,21 @@ Window {
                 Kirigami.FormData.label: root.t("Startup:")
                 text: root.t("Start automatically at login")
             }
+            QQC.TextField {
+                id: mountField
+                Kirigami.FormData.label: root.t("Cloud folder location:")
+                Layout.fillWidth: true
+            }
+            QQC.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font: Kirigami.Theme.smallFont
+                text: root.t("The folder where your cloud drive appears, for example ~/kDrive. Pick a new or empty folder inside your home folder.")
+            }
             QQC.Switch {
                 id: writableSwitch
-                Kirigami.FormData.label: root.t("kDrive folder:")
+                Kirigami.FormData.label: root.t("Cloud folder:")
                 text: root.t("Allow saving and editing files in it")
             }
             QQC.Label {
@@ -743,6 +770,104 @@ Window {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.margins: Kirigami.Units.largeSpacing
+                Layout.bottomMargin: 0
+                Kirigami.Heading {
+                    Layout.fillWidth: true
+                    level: 4
+                    text: root.t("Cloud folder")
+                }
+                QQC.Button {
+                    text: root.t("Keep a folder on this computer…")
+                    icon.name: "folder-download"
+                    enabled: root.reachable && root.drive !== null && root.drive.mounted
+                    onClicked: {
+                        destDialog.pinMode = true
+                        destDialog.editName = ""
+                        destDialog.localPath = ""
+                        destDialog.stack = []
+                        destDialog.load()
+                        destDialog.open()
+                    }
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: Kirigami.Units.largeSpacing
+                Layout.rightMargin: Kirigami.Units.largeSpacing
+                Layout.topMargin: Kirigami.Units.smallSpacing
+                spacing: Kirigami.Units.largeSpacing
+                Kirigami.Icon {
+                    source: "folder-cloud"
+                    implicitWidth: Kirigami.Units.iconSizes.medium
+                    implicitHeight: Kirigami.Units.iconSizes.medium
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 0
+                    QQC.Label {
+                        Layout.fillWidth: true
+                        text: root.st ? root.shortPath(root.st.mountpoint) : ""
+                        elide: Text.ElideMiddle
+                    }
+                    QQC.Label {
+                        Layout.fillWidth: true
+                        opacity: 0.7
+                        font: Kirigami.Theme.smallFont
+                        elide: Text.ElideRight
+                        text: !root.drive ? ""
+                            : !root.drive.mounted ? root.t("Not connected; kdlite keeps trying.")
+                            : root.t("Everything in your drive. Files download when you open them. On this computer now: ") + root.human(root.drive.bytes)
+                    }
+                }
+                QQC.Button {
+                    text: root.t("Open")
+                    icon.name: "document-open-folder"
+                    enabled: root.drive !== null && root.drive.mounted
+                    onClicked: Qt.openUrlExternally("file://" + root.st.mountpoint)
+                }
+            }
+            Repeater {
+                model: root.drive ? root.drive.pins : []
+                delegate: RowLayout {
+                    required property string modelData
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing + Kirigami.Units.iconSizes.medium + Kirigami.Units.largeSpacing
+                    Layout.rightMargin: Kirigami.Units.largeSpacing
+                    spacing: Kirigami.Units.smallSpacing
+                    Kirigami.Icon {
+                        source: "folder-download"
+                        implicitWidth: Kirigami.Units.iconSizes.small
+                        implicitHeight: Kirigami.Units.iconSizes.small
+                    }
+                    QQC.Label {
+                        Layout.fillWidth: true
+                        text: modelData
+                        elide: Text.ElideMiddle
+                    }
+                    QQC.Label {
+                        opacity: 0.7
+                        font: Kirigami.Theme.smallFont
+                        text: root.t("Kept on this computer too")
+                    }
+                    QQC.ToolButton {
+                        icon.name: "cloudstatus"
+                        text: root.t("Keep in cloud only")
+                        display: QQC.AbstractButton.IconOnly
+                        QQC.ToolTip.text: root.t("Keep in cloud only: the downloaded copy is removed, the cloud is unchanged")
+                        QQC.ToolTip.visible: hovered
+                        QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
+                        onClicked: root.api("/api/pin", { paths: [modelData], on: false }, function() { root.errorText = ""; root.refresh() })
+                    }
+                }
+            }
+            Kirigami.Separator {
+                Layout.fillWidth: true
+                Layout.topMargin: Kirigami.Units.largeSpacing
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: Kirigami.Units.largeSpacing
                 Kirigami.Heading {
                     Layout.fillWidth: true
                     level: 4
@@ -892,6 +1017,7 @@ Window {
                                 QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
                                 onClicked: {
                                     destDialog.editName = row.modelData.name
+                                    destDialog.pinMode = false
                                     destDialog.localPath = row.modelData.local
                                     destDialog.stack = []
                                     destDialog.load()

@@ -64,6 +64,10 @@ pub struct Ui {
     confirmed: Mutex<BTreeSet<String>>,
     /// Silme onayi icin bildirimi gosterilen yedekler (ad -> dosya sayisi).
     asked: Mutex<BTreeMap<String, u64>>,
+    /// Bagli bulut klasoru (baglaninca tepsi tarafindan verilir).
+    mount: Mutex<Option<Arc<crate::fs::Inner>>>,
+    /// Indirilmis dosyalarin son olculen boyutu (dosya, bayt, kalici bayt).
+    usage: Mutex<Option<(Instant, (usize, u64, u64))>>,
 }
 
 fn autostart_path() -> PathBuf {
@@ -161,6 +165,34 @@ fn query_param(url: &str, key: &str) -> Option<String> {
     })
 }
 
+/// `dir` altindaki, eski bulut klasorune bakan kisayollari yenisine cevirir.
+fn retarget_links(dir: &Path, old: &Path, new: &Path, count: &mut u64) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for ent in rd.flatten() {
+        let path = ent.path();
+        let Ok(meta) = path.symlink_metadata() else { continue };
+        if meta.is_dir() {
+            retarget_links(&path, old, new, count);
+        } else if meta.file_type().is_symlink() {
+            let Ok(target) = std::fs::read_link(&path) else { continue };
+            let Ok(rest) = target.strip_prefix(old) else { continue };
+            let to = new.join(rest);
+            if std::fs::remove_file(&path).is_ok() && std::os::unix::fs::symlink(&to, &path).is_ok() {
+                *count += 1;
+            }
+        }
+    }
+}
+
+/// Bulut klasoru tasindiysa eski (bos) klasoru kaldirir.
+pub fn clean_old_mount() {
+    let note = config::config_dir().join("old-mount");
+    if let Ok(old) = std::fs::read_to_string(&note) {
+        let _ = std::fs::remove_dir(old.trim());
+        let _ = std::fs::remove_file(&note);
+    }
+}
+
 impl Ui {
     pub fn new(
         api: Arc<Api>,
@@ -202,6 +234,8 @@ impl Ui {
             sync_deletes: true,
             confirmed: Mutex::new(BTreeSet::new()),
             asked: Mutex::new(BTreeMap::new()),
+            mount: Mutex::new(None),
+            usage: Mutex::new(None),
         }
     }
 
@@ -392,13 +426,135 @@ impl Ui {
         sources.into_iter().find(|s| abs.starts_with(&s.local)).map(|s| (s, abs))
     }
 
+    pub fn set_mount(&self, inner: Arc<crate::fs::Inner>) {
+        *self.mount.lock().unwrap() = Some(inner);
+        self.write_drive_file();
+    }
+
+    /// Dolphin eklentisi icin: bulut klasorunun yeri ve bilgisayarda da
+    /// tutulan yollar.
+    fn write_drive_file(&self) {
+        let v = json!({ "mountpoint": self.mountpoint, "pins": crate::pins::load() });
+        let path = config::config_dir().join("drive.json");
+        let tmp = path.with_extension("tmp");
+        if std::fs::write(&tmp, v.to_string()).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+
+    /// Bulut klasorunun durumu (pencere icin).
+    fn drive_state(&self) -> Value {
+        let inner = self.mount.lock().unwrap().clone();
+        let usage = inner.as_ref().map(|i| {
+            let mut u = self.usage.lock().unwrap();
+            match *u {
+                Some((at, v)) if at.elapsed() < Duration::from_secs(10) => v,
+                _ => {
+                    let v = i.cache.usage();
+                    *u = Some((Instant::now(), v));
+                    v
+                }
+            }
+        });
+        let (files, bytes, kept) = usage.unwrap_or((0, 0, 0));
+        json!({
+            "mounted": inner.is_some(),
+            "files": files,
+            "bytes": bytes,
+            "kept_bytes": kept,
+            "pins": crate::pins::load(),
+        })
+    }
+
+    /// Bulut klasorundeki bir yolun buluttaki goreli yolu. Mutlak yol bulut
+    /// klasorunun icinde olmali; goreli yol dogrudan bulut yolu sayilir.
+    fn cloud_rel(&self, path: &str) -> Option<String> {
+        let p = Path::new(path);
+        if !p.is_absolute() {
+            return Some(crate::pins::normalize(path));
+        }
+        if p == self.mountpoint {
+            return Some(String::new());
+        }
+        let abs = match (p.parent().and_then(|d| std::fs::canonicalize(d).ok()), p.file_name()) {
+            (Some(dir), Some(name)) => dir.join(name),
+            _ => return None,
+        };
+        let rel = abs.strip_prefix(&self.mountpoint).ok()?;
+        Some(crate::pins::normalize(&rel.to_string_lossy()))
+    }
+
+    /// Bulut klasorundeki ogeleri bilgisayarda da tutar (`on`) ya da yalnizca
+    /// bulutta birakir: indirilmis kopyalar silinir, buluta dokunulmaz.
+    fn pin(&self, paths: &[String], on: bool) -> Result<Value> {
+        let inner = self
+            .mount
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow!("{}", tr!("the cloud folder is not connected right now")))?;
+        let mut pins = crate::pins::load();
+        let mut released: Vec<String> = Vec::new();
+        let mut done = 0u64;
+        for p in paths {
+            let rel = self.cloud_rel(p).ok_or_else(|| anyhow!("{}", tr!("this is not inside the cloud folder")))?;
+            if rel.is_empty() {
+                bail!("{}", tr!("the whole drive cannot be chosen; pick a folder or file inside it"));
+            }
+            if inner.resolve(&rel).is_err() {
+                bail!("{}", tr!("“{}” was not found in the cloud", rel));
+            }
+            if on {
+                if crate::pins::covering(&pins, &rel).is_none() {
+                    // Altindaki eski kayitlar gereksizlesir.
+                    pins.retain(|x| !x.starts_with(&format!("{}/", rel)));
+                    pins.push(rel);
+                }
+            } else {
+                pins.retain(|x| x != &rel && !x.starts_with(&format!("{}/", rel)));
+                if let Some(parent) = crate::pins::covering(&pins, &rel) {
+                    bail!("{}", tr!("this is inside “{}”, which is kept on this computer; change that folder instead", parent));
+                }
+                released.push(rel);
+            }
+            done += 1;
+        }
+        crate::pins::save(&pins)?;
+        self.write_drive_file();
+        crate::pins::wake();
+        if !released.is_empty() {
+            std::thread::spawn(move || {
+                let ids: std::collections::HashSet<u64> =
+                    released.iter().flat_map(|r| crate::pins::files_under(&inner, r)).map(|e| e.id).collect();
+                let (n, bytes) = inner.cache.release(&ids);
+                log::info!("bilgisayardaki kopyalar silindi: {} dosya, {} bayt", n, bytes);
+            });
+        }
+        *self.usage.lock().unwrap() = None;
+        Ok(json!({ "drive": true, "mode": if on { "both" } else { "cloud" }, "done": done }))
+    }
+
     /// Dosyalarin konumunu degistirir (yalnizca bulutta / iki yerde /
     /// yalnizca bilgisayarda). Calisan yedekleme varsa bitmesini bekler.
     fn place(&self, paths: &[String], mode: backup::Place) -> Result<Value> {
         let mut groups: BTreeMap<String, (Source, Vec<PathBuf>)> = BTreeMap::new();
+        // Bulut klasorunun icindeki (bir yedege ait olmayan) ogeler.
+        let mut drive: Vec<String> = Vec::new();
         for p in paths {
-            let (src, local) = self.locate(p).ok_or_else(|| anyhow!("{}", tr!("this file is not inside a backed-up folder")))?;
-            groups.entry(src.name.clone()).or_insert_with(|| (src, Vec::new())).1.push(local);
+            match self.locate(p) {
+                Some((src, local)) => groups.entry(src.name.clone()).or_insert_with(|| (src, Vec::new())).1.push(local),
+                None if self.cloud_rel(p).is_some() && Path::new(p).is_absolute() => drive.push(p.clone()),
+                None => bail!("{}", tr!("this file is not inside a backed-up folder")),
+            }
+        }
+        if !drive.is_empty() {
+            if mode == backup::Place::Local {
+                bail!("{}", tr!("files in the cloud folder live in the cloud; they can be kept on this computer too, but not on this computer only"));
+            }
+            let out = self.pin(&drive, mode == backup::Place::Both)?;
+            if groups.is_empty() {
+                return Ok(out);
+            }
         }
         if groups.is_empty() {
             bail!("{}", tr!("no file selected"));
@@ -544,6 +700,7 @@ impl Ui {
             "lang": crate::i18n::lang(),
             "backup_root": self.backup_root,
             "mountpoint": self.mountpoint,
+            "drive": self.drive_state(),
             "interval": self.interval.as_secs(),
             "watching": self.watching(),
             "mount_pending": crate::fs::PENDING.load(Ordering::Relaxed),
@@ -658,6 +815,38 @@ impl Ui {
                 text = crate::setup::set_line(&text, "backup_root", &quote(&clean));
             }
         }
+        let mut moved: Option<PathBuf> = None;
+        if let Some(m) = body.get("mountpoint").and_then(|v| v.as_str()) {
+            let home = config::home();
+            let m = m.trim().trim_end_matches('/');
+            let new = match m.strip_prefix("~/") {
+                Some(rest) => home.join(rest),
+                None => PathBuf::from(m),
+            };
+            if new != self.mountpoint {
+                if !new.is_absolute() || !new.starts_with(&home) || new == home {
+                    bail!("{}", tr!("the cloud folder must be a folder inside your home folder"));
+                }
+                if backup::load_sources().iter().any(|s| new.starts_with(&s.local) || Path::new(&s.local).starts_with(&new)) {
+                    bail!("{}", tr!("the cloud folder cannot be inside a backed-up folder"));
+                }
+                match std::fs::read_dir(&new) {
+                    Ok(mut rd) => {
+                        if rd.next().is_some() {
+                            bail!("{}", tr!("that folder already has files in it; choose a new or empty folder"));
+                        }
+                    }
+                    Err(_) if new.symlink_metadata().is_ok() => bail!("{}", tr!("that name is already used by a file")),
+                    Err(_) => std::fs::create_dir_all(&new).context(tr!("could not create the folder"))?,
+                }
+                let shown = match new.strip_prefix(&home) {
+                    Ok(rest) => format!("~/{}", rest.display()),
+                    Err(_) => new.display().to_string(),
+                };
+                text = crate::setup::set_line(&text, "mountpoint", &quote(&shown));
+                moved = Some(new);
+            }
+        }
         if let Some(list) = body.get("exclude").and_then(|v| v.as_array()) {
             let items: Vec<String> = list
                 .iter()
@@ -677,6 +866,16 @@ impl Ui {
             if a != autostart_path().exists() {
                 set_autostart(a).context(tr!("could not set up autostart"))?;
             }
+        }
+        if let (Some(new), true) = (&moved, text != old) {
+            // "Yalnizca bulutta" kisayollari yeni yere baksin; eski bos klasor
+            // yeniden baslayinca kaldirilir.
+            let mut n = 0;
+            for s in backup::load_sources() {
+                retarget_links(Path::new(&s.local), &self.mountpoint, new, &mut n);
+            }
+            log::info!("bulut klasoru tasindi: {} -> {} ({} kisayol guncellendi)", self.mountpoint.display(), new.display(), n);
+            let _ = std::fs::write(config::config_dir().join("old-mount"), self.mountpoint.to_string_lossy().as_bytes());
         }
         if text != old {
             use std::io::Write;
@@ -917,6 +1116,18 @@ impl Ui {
                     .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
                     .unwrap_or_default();
                 match self.place(&paths, mode) {
+                    Ok(v) => json_ok(v),
+                    Err(e) => json_err(400, format!("{:#}", e)),
+                }
+            }
+            (true, "/api/pin") => {
+                let paths: Vec<String> = body
+                    .get("paths")
+                    .and_then(|v| v.as_array())
+                    .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())
+                    .unwrap_or_default();
+                let on = body.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
+                match self.pin(&paths, on) {
                     Ok(v) => json_ok(v),
                     Err(e) => json_err(400, format!("{:#}", e)),
                 }

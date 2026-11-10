@@ -86,7 +86,7 @@ public:
 
     QStringList getOverlays(const QUrl &url) override
     {
-        if (!url.isLocalFile() || m_sources.isEmpty()) {
+        if (!url.isLocalFile() || (m_sources.isEmpty() && m_pins.isEmpty())) {
             return {};
         }
         const QString path = url.toLocalFile();
@@ -103,6 +103,9 @@ public:
 private:
     bool inAnySource(const QString &path) const
     {
+        if (!m_mount.isEmpty() && path.startsWith(m_mount)) {
+            return true;
+        }
         for (const Source &s : m_sources) {
             if (path.startsWith(s.root) || path + QLatin1Char('/') == s.root) {
                 return true;
@@ -113,6 +116,16 @@ private:
 
     QStringList compute(const QString &path) const
     {
+        // Bulut klasoru: bilgisayarda da tutulan ogeler isaretlenir.
+        if (!m_mount.isEmpty() && path.startsWith(m_mount)) {
+            const QString rel = path.mid(m_mount.size());
+            for (const QString &pin : m_pins) {
+                if (rel == pin || rel.startsWith(pin + QLatin1Char('/'))) {
+                    return {OK};
+                }
+            }
+            return {};
+        }
         for (const Source &s : m_sources) {
             if (path + QLatin1Char('/') == s.root) {
                 // Yedeklenen klasorun kendisi.
@@ -152,6 +165,16 @@ private:
     void load()
     {
         m_paused = QFile::exists(m_dir + QStringLiteral("/paused"));
+
+        const QJsonObject drive = readJson(m_dir + QStringLiteral("/drive.json")).object();
+        m_mount = drive.value(QLatin1String("mountpoint")).toString();
+        if (!m_mount.isEmpty() && !m_mount.endsWith(QLatin1Char('/'))) {
+            m_mount += QLatin1Char('/');
+        }
+        m_pins.clear();
+        for (const auto &v : drive.value(QLatin1String("pins")).toArray()) {
+            m_pins << v.toString();
+        }
 
         m_exclude.clear();
         const QJsonArray ex = readJson(m_dir + QStringLiteral("/exclude.json")).array();
@@ -220,6 +243,8 @@ private:
     QString m_dir;
     QList<Source> m_sources;
     QStringList m_exclude;
+    QString m_mount; // bulut klasoru, sonunda '/' ile
+    QStringList m_pins;
     bool m_paused = false;
     QHash<QString, QStringList> m_shown;
     QFileSystemWatcher m_watcher;

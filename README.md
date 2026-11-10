@@ -14,7 +14,8 @@ More providers are planned.
 ## What it does
 
 - **Your drive as a folder.** Browse, open, save and edit files in
-  `~/kDrive-bulut`. Files download on first use.
+  `~/kDrive-bulut` (you can change the location in *Settings*). Files
+  download on first use.
 - **Automatic backup.** Choose folders to back up and where they go in the
   cloud. Changes upload within seconds.
 - **You decide where each file lives.** Cloud only, cloud and computer, or
@@ -59,7 +60,9 @@ computer, in a file only you can read.
 
 - **Tray icon:** click to open the window. The menu has pause, resume and
   *Back up now*.
-- **Window:** add folders, see their status, open *Settings*.
+- **Window:** add folders, see their status, open *Settings*. The *Cloud
+  folder* section opens your drive and lets you choose cloud folders that
+  should also be kept on this computer, so they work without internet.
 - **Dolphin:** right-click a file or folder and open the **kdlite** menu.
 
 ### Where a file is kept

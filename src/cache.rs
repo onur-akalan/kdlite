@@ -290,6 +290,30 @@ impl Cache {
         (n, total, pin)
     }
 
+    /// Verilen dosyalarin indirilmis kopyalarini siler (acik olanlar haric).
+    /// (silinen dosya sayisi, bayt) doner.
+    pub fn release(&self, ids: &HashSet<u64>) -> (usize, u64) {
+        self.pinned.lock().unwrap().retain(|i| !ids.contains(i));
+        let open: HashSet<u64> = self.open.lock().unwrap().keys().copied().collect();
+        let (mut n, mut bytes) = (0, 0);
+        let Ok(rd) = fs::read_dir(&self.dir) else {
+            return (0, 0);
+        };
+        for ent in rd.flatten() {
+            let name = ent.file_name().to_string_lossy().into_owned();
+            let Some(id) = id_of(&name) else { continue };
+            if name.ends_with(".part") || !ids.contains(&id) || open.contains(&id) {
+                continue;
+            }
+            let len = ent.metadata().map(|m| m.len()).unwrap_or(0);
+            if fs::remove_file(ent.path()).is_ok() {
+                n += 1;
+                bytes += len;
+            }
+        }
+        (n, bytes)
+    }
+
     /// Ust sinir asildiysa, sabitlenmemis dosyalari en eski kullanilandan
     /// baslayarak siler.
     pub fn evict(&self) {

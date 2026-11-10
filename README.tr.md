@@ -14,7 +14,8 @@ Başka sağlayıcılar planlanıyor.
 ## Ne yapar
 
 - **Sürücün bir klasör olarak.** `~/kDrive-bulut` içinde dosyalara göz at,
-  aç, kaydet ve düzenle. Dosyalar ilk kullanımda iner.
+  aç, kaydet ve düzenle (yerini *Ayarlar*'dan değiştirebilirsin). Dosyalar
+  ilk kullanımda iner.
 - **Otomatik yedekleme.** Yedeklenecek klasörleri ve buluttaki yerlerini seç.
   Değişiklikler birkaç saniye içinde yüklenir.
 - **Her dosyanın nerede duracağına sen karar verirsin.** Yalnızca bulutta,
@@ -60,7 +61,9 @@ senin okuyabildiğin bir dosyada saklanır.
 
 - **Tepsi simgesi:** tıklayınca pencere açılır. Menüde duraklat, sürdür ve
   *Şimdi yedekle* bulunur.
-- **Pencere:** klasör ekle, durumlarını gör, *Ayarlar*'ı aç.
+- **Pencere:** klasör ekle, durumlarını gör, *Ayarlar*'ı aç. *Bulut klasörü*
+  bölümü sürücünü açar ve bilgisayarda da duracak bulut klasörlerini
+  seçtirir; bunlar internet yokken de açılır.
 - **Dolphin:** bir dosyaya ya da klasöre sağ tıkla ve **kdlite** menüsünü aç.
 
 ### Dosya nerede durur
