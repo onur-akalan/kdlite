@@ -4,6 +4,7 @@
 use crate::api::Api;
 use crate::backup::{self, Backup, Progress, Source, Stats};
 use crate::config;
+use crate::tr;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -85,7 +86,7 @@ fn set_autostart(on: bool) -> Result<()> {
         std::fs::create_dir_all(dir)?;
     }
     let text = format!(
-        "[Desktop Entry]\nType=Application\nName=kdlite\nComment=kDrive'i baglar ve secilen klasorleri yedekler\nExec={} tray --hidden\nIcon=folder-cloud\nStartupNotify=false\n",
+        "[Desktop Entry]\nType=Application\nName=kdlite\nComment=Mounts your cloud drive and backs up selected folders\nExec={} tray --hidden\nIcon=folder-cloud\nStartupNotify=false\n",
         exe.display()
     );
     std::fs::write(&path, text)?;
@@ -243,7 +244,7 @@ impl Ui {
                 text.push_str(&p);
                 text.push('\n');
             }
-            std::fs::write(&path, text).context("liste dosyası oluşturulamadı")?;
+            std::fs::write(&path, text).context(tr!("could not create the list file"))?;
             *self.ignore_seen.lock().unwrap() = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         }
         std::process::Command::new("xdg-open")
@@ -252,7 +253,7 @@ impl Ui {
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .context("metin düzenleyici açılamadı")?;
+            .context(tr!("could not open a text editor"))?;
         Ok(())
     }
 
@@ -393,16 +394,16 @@ impl Ui {
     fn place(&self, paths: &[String], mode: backup::Place) -> Result<Value> {
         let mut groups: BTreeMap<String, (Source, Vec<PathBuf>)> = BTreeMap::new();
         for p in paths {
-            let (src, local) = self.locate(p).ok_or_else(|| anyhow!("bu dosya yedeklenen bir klasörde değil"))?;
+            let (src, local) = self.locate(p).ok_or_else(|| anyhow!("{}", tr!("this file is not inside a backed-up folder")))?;
             groups.entry(src.name.clone()).or_insert_with(|| (src, Vec::new())).1.push(local);
         }
         if groups.is_empty() {
-            bail!("dosya seçilmedi");
+            bail!("{}", tr!("no file selected"));
         }
         let deadline = Instant::now() + Duration::from_secs(60);
         while self.running.swap(true, Ordering::SeqCst) {
             if Instant::now() > deadline {
-                bail!("şu an yedekleme sürüyor; bitince yeniden dene");
+                bail!("{}", tr!("a backup is running right now; try again when it finishes"));
             }
             std::thread::sleep(Duration::from_millis(300));
         }
@@ -446,14 +447,14 @@ impl Ui {
         let src = backup::load_sources()
             .into_iter()
             .find(|s| s.name == name)
-            .ok_or_else(|| anyhow!("listede boyle bir yedek yok"))?;
+            .ok_or_else(|| anyhow!("{}", tr!("no such backup in the list")))?;
         if apply {
             self.confirmed.lock().unwrap().insert(src.name.clone());
         } else {
             let deadline = Instant::now() + Duration::from_secs(60);
             while self.running.swap(true, Ordering::SeqCst) {
                 if Instant::now() > deadline {
-                    bail!("şu an yedekleme sürüyor; bitince yeniden dene");
+                    bail!("{}", tr!("a backup is running right now; try again when it finishes"));
                 }
                 std::thread::sleep(Duration::from_millis(300));
             }
@@ -493,6 +494,7 @@ impl Ui {
         let p = &self.progress;
         json!({
             "home": config::home(),
+            "lang": crate::i18n::lang(),
             "backup_root": self.backup_root,
             "mountpoint": self.mountpoint,
             "interval": self.interval.as_secs(),
@@ -519,9 +521,9 @@ impl Ui {
     /// Ev klasoru altindaki bir klasorun alt klasorlerini listeler.
     fn ls(&self, path: &str) -> Result<Value> {
         let home = std::fs::canonicalize(config::home())?;
-        let dir = std::fs::canonicalize(path).context("klasor bulunamadi")?;
+        let dir = std::fs::canonicalize(path).context(tr!("folder not found"))?;
         if !dir.starts_with(&home) {
-            bail!("yalnizca ev klasorunun icine bakilabilir");
+            bail!("{}", tr!("only the home folder can be browsed"));
         }
         let mut dirs = Vec::new();
         for ent in std::fs::read_dir(&dir)?.flatten() {
@@ -558,6 +560,8 @@ impl Ui {
         Ok(json!({
             "drive": drive,
             "writable": cfg.writable,
+            "language": cfg.language,
+            "languages": crate::i18n::available(),
             "sync_deletes": cfg.sync_deletes,
             "cache_max_gb": cfg.cache_max_gb,
             "backup_root": self.backup_root,
@@ -571,31 +575,37 @@ impl Ui {
 
     /// Ayarlari dosyaya yazar ve servisin yeniden baslamasini ister.
     fn save_settings(&self, body: &Value) -> Result<()> {
-        let old = std::fs::read_to_string(&self.config_path).context("ayar dosyası okunamadı")?;
+        let old = std::fs::read_to_string(&self.config_path).context(tr!("could not read the settings file"))?;
         let mut text = old.clone();
         let quote = |s: &str| toml::Value::String(s.to_string()).to_string();
         if let Some(w) = body.get("writable").and_then(|v| v.as_bool()) {
             text = crate::setup::set_line(&text, "writable", &w.to_string());
+        }
+        if let Some(l) = body.get("language").and_then(|v| v.as_str()) {
+            let ok = l == "auto" || l == "en" || crate::i18n::available().contains(&l);
+            if ok {
+                text = crate::setup::set_line(&text, "language", &quote(l));
+            }
         }
         if let Some(d) = body.get("sync_deletes").and_then(|v| v.as_bool()) {
             text = crate::setup::set_line(&text, "sync_deletes", &d.to_string());
         }
         if let Some(gb) = body.get("cache_max_gb").and_then(|v| v.as_f64()) {
             if !(1.0..=4000.0).contains(&gb) {
-                bail!("önbellek sınırı 1 ile 4000 GB arasında olmalı");
+                bail!("{}", tr!("the cache limit must be between 1 and 4000 GB"));
             }
             text = crate::setup::set_line(&text, "cache_max_gb", &format!("{}", gb.round() as u64));
         }
         if let Some(m) = body.get("rescan_min").and_then(|v| v.as_u64()) {
             if !(1..=1440).contains(&m) {
-                bail!("tarama aralığı 1 ile 1440 dakika arasında olmalı");
+                bail!("{}", tr!("the rescan interval must be between 1 and 1440 minutes"));
             }
             text = crate::setup::set_line(&text, "rescan_secs", &(m * 60).to_string());
         }
         if let Some(r) = body.get("backup_root").and_then(|v| v.as_str()) {
             let clean = r.split('/').map(str::trim).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/");
             if clean.is_empty() {
-                bail!("varsayılan yedek yeri boş olamaz");
+                bail!("{}", tr!("the default backup place cannot be empty"));
             }
             if clean != self.backup_root {
                 text = crate::setup::set_line(&text, "backup_root", &quote(&clean));
@@ -615,10 +625,10 @@ impl Ui {
             }
         }
         // Yazmadan once yeni metnin gecerli oldugunu dogrula.
-        toml::from_str::<config::Config>(&text).context("ayarlar geçersiz")?;
+        toml::from_str::<config::Config>(&text).context(tr!("the settings are not valid"))?;
         if let Some(a) = body.get("autostart").and_then(|v| v.as_bool()) {
             if a != autostart_path().exists() {
-                set_autostart(a).context("otomatik başlatma ayarlanamadı")?;
+                set_autostart(a).context(tr!("could not set up autostart"))?;
             }
         }
         if text != old {
@@ -644,7 +654,7 @@ impl Ui {
     fn logout(&self) -> Result<()> {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let old = std::fs::read_to_string(&self.config_path).context("ayar dosyası okunamadı")?;
+        let old = std::fs::read_to_string(&self.config_path).context(tr!("could not read the settings file"))?;
         let text = crate::setup::set_line(&old, "token", "\"\"");
         let tmp = self.config_path.with_extension("tmp");
         let _ = std::fs::remove_file(&tmp);
@@ -667,7 +677,7 @@ impl Ui {
             d.split('/').filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
         });
         let mut all = backup::load_sources();
-        let src = all.iter_mut().find(|s| s.name == name).ok_or_else(|| anyhow!("listede boyle bir yedek yok"))?;
+        let src = all.iter_mut().find(|s| s.name == name).ok_or_else(|| anyhow!("{}", tr!("no such backup in the list")))?;
         src.dest = dest;
         backup::save_sources(&all)?;
         self.kick();
@@ -692,28 +702,28 @@ impl Ui {
         let dest = dest.map(|d| {
             d.split('/').filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
         });
-        let abs = std::fs::canonicalize(path).context("klasor bulunamadi")?;
+        let abs = std::fs::canonicalize(path).context(tr!("folder not found"))?;
         if !abs.is_dir() {
-            bail!("bu bir klasor degil");
+            bail!("{}", tr!("this is not a folder"));
         }
         let home = std::fs::canonicalize(config::home())?;
         if abs == home || abs == Path::new("/") {
-            bail!("ev klasorunun tamami eklenemez; icinden klasor secin");
+            bail!("{}", tr!("the whole home folder cannot be added; choose folders inside it"));
         }
         if abs.starts_with(&self.mountpoint) {
-            bail!("bu klasor zaten kDrive'in kendisi");
+            bail!("{}", tr!("this folder is kDrive itself"));
         }
         let mut all = backup::load_sources();
         for s in &all {
             let other = Path::new(&s.local);
             if abs == other {
-                bail!("bu klasor zaten yedekleniyor");
+                bail!("{}", tr!("this folder is already backed up"));
             }
             if abs.starts_with(other) {
-                bail!("bu klasor zaten '{}' yedeginin icinde", s.name);
+                bail!("{}", tr!("this folder is already inside the “{}” backup", s.name));
             }
             if other.starts_with(&abs) {
-                bail!("icindeki '{}' ayrica yedekleniyor; once onu kaldirin", s.name);
+                bail!("{}", tr!("“{}” inside it is backed up separately; remove that first", s.name));
             }
         }
         let base = abs
@@ -755,11 +765,11 @@ impl Ui {
         if all.len() == before {
             if let Some(l) = &local {
                 if let Some(s) = all.iter().find(|s| l.starts_with(&s.local)) {
-                    bail!("bu klasör “{}” yedeğinin içinde; ayrı çıkarılamaz", s.name);
+                    bail!("{}", tr!("this folder is inside the “{}” backup; it cannot be removed separately", s.name));
                 }
-                bail!("bu klasör zaten yedeklenmiyor");
+                bail!("{}", tr!("this folder is not being backed up"));
             }
-            bail!("listede boyle bir yedek yok");
+            bail!("{}", tr!("no such backup in the list"));
         }
         backup::save_sources(&all)?;
         self.resync_watcher();
@@ -880,10 +890,10 @@ impl Ui {
                 }
                 let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
                 let Some(src) = backup::load_sources().into_iter().find(|s| abs.starts_with(&s.local)) else {
-                    return json_err(400, "bu klasör yedeklenmiyor".into());
+                    return json_err(400, tr!("this folder is not being backed up"));
                 };
                 if self.running.load(Ordering::SeqCst) {
-                    return json_err(400, "şu an zaten bir yedekleme sürüyor".into());
+                    return json_err(400, tr!("a backup is already running"));
                 }
                 let me = self.clone();
                 let only: BTreeSet<String> = [src.name.clone()].into();

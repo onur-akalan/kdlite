@@ -16,6 +16,11 @@ Window {
     title: "kdlite"
 
     readonly property string base: "http://127.0.0.1:@PORT@"
+    // Ceviri: kaynak dil Ingilizce; baska diller lang/<kod>.json dosyasindan
+    // gelir ve pencere baslatilirken buraya gomulur.
+    readonly property string lang: "@LANG@"
+    readonly property var strings: (@STRINGS@)
+    function t(s) { var v = strings[s]; return v === undefined ? s : v }
     property var st: null          // sunucudan gelen son durum
     property bool reachable: true
     property string errorText: ""
@@ -36,10 +41,10 @@ Window {
     }
     function ago(ts) {
         var s = Math.max(0, Math.floor(Date.now() / 1000) - ts)
-        if (s < 60) return "az önce"
-        if (s < 3600) return Math.floor(s / 60) + " dk önce"
-        if (s < 86400) return Math.floor(s / 3600) + " saat önce"
-        return Math.floor(s / 86400) + " gün önce"
+        if (s < 60) return root.t("just now")
+        if (s < 3600) return Math.floor(s / 60) + root.t(" min ago")
+        if (s < 86400) return Math.floor(s / 3600) + root.t(" h ago")
+        return Math.floor(s / 86400) + root.t(" d ago")
     }
     function shortPath(p) {
         return st && p.indexOf(st.home) === 0 ? "~" + p.slice(st.home.length) : p
@@ -56,7 +61,7 @@ Window {
             } else if (x.status === 0) {
                 root.reachable = false
             } else {
-                root.errorText = (j && j.error) ? j.error : "İstek başarısız"
+                root.errorText = (j && j.error) ? j.error : root.t("Request failed")
             }
         }
         x.open(body === undefined ? "GET" : "POST", base + path)
@@ -85,34 +90,34 @@ Window {
         return false
     }
     readonly property string statusTitle: {
-        if (!reachable) return "kdlite çalışmıyor"
-        if (!st) return "Yükleniyor…"
-        if (running && st.freeing) return "Dosyaların konumu değiştiriliyor"
+        if (!reachable) return root.t("kdlite is not running")
+        if (!st) return root.t("Loading…")
+        if (running && st.freeing) return root.t("Changing where files are kept")
         if (running) {
             var p = st.progress
-            return p.total_files > 0 ? "Yedekleniyor: " + p.source + " · " + p.done_files + "/" + p.total_files + " dosya"
-                                     : "Taranıyor: " + (p.source || "…")
+            return p.total_files > 0 ? root.t("Backing up: ") + p.source + " · " + p.done_files + "/" + p.total_files + root.t(" files")
+                                     : root.t("Scanning: ") + (p.source || "…")
         }
-        if (paused) return "Yedekleme duraklatıldı"
-        if (sources.length === 0) return "Henüz klasör seçilmedi"
-        if (anyFailed) return "Bazı dosyalar yedeklenemedi"
-        for (var i = 0; i < sources.length; i++) if (!sources[i].last) return "Yedekleme bekliyor"
-        return "Her şey yedekli"
+        if (paused) return root.t("Backup paused")
+        if (sources.length === 0) return root.t("No folders selected yet")
+        if (anyFailed) return root.t("Some files could not be backed up")
+        for (var i = 0; i < sources.length; i++) if (!sources[i].last) return root.t("Waiting to back up")
+        return root.t("Everything is backed up")
     }
     readonly property string statusDetail: {
-        if (!reachable) return "Tepsi simgesinden kdlite'ı yeniden başlat."
+        if (!reachable) return root.t("Restart kdlite from the application menu.")
         if (!st) return ""
-        if (running && st.freeing) return st.progress.done_files + "/" + st.progress.total_files + " dosya"
+        if (running && st.freeing) return st.progress.done_files + "/" + st.progress.total_files + root.t(" files")
         if (running) {
             var p = st.progress
             return p.total_files > 0 ? human(p.done_bytes) + " / " + human(p.total_bytes) + " · " + p.current : ""
         }
-        if (paused) return "“Sürdür”e basana kadar hiçbir şey yüklenmez."
-        if (sources.length === 0) return "Yedeklemek istediğin klasörleri ekle; değişiklikler kendiliğinden kDrive'a akar."
-        if (st.mount_failed > 0) return "kDrive klasörüne kaydedilen " + st.mount_failed + " dosya yüklenemedi; yeniden denenecek."
-        if (st.mount_pending > 0) return "kDrive klasörüne kaydedilen " + st.mount_pending + " dosya yükleniyor…"
-        return st.watching ? "Klasörler izleniyor; değişiklikler birkaç saniye içinde yüklenir."
-                           : "Değişiklikler " + Math.max(1, Math.round(st.interval / 60)) + " dakikada bir kontrol edilip yükleniyor."
+        if (paused) return root.t("Nothing is uploaded until you press “Resume”.")
+        if (sources.length === 0) return root.t("Add the folders you want to back up; changes flow to kDrive on their own.")
+        if (st.mount_failed > 0) return root.t("Saved to the kDrive folder: ") + st.mount_failed + root.t(" files could not be uploaded; will retry.")
+        if (st.mount_pending > 0) return root.t("Saved to the kDrive folder: ") + st.mount_pending + root.t(" files uploading…")
+        return st.watching ? root.t("Folders are watched; changes upload within seconds.")
+                           : root.t("Changes are checked and uploaded every ") + Math.max(1, Math.round(st.interval / 60)) + root.t(" min.")
     }
 
     Timer {
@@ -125,7 +130,7 @@ Window {
 
     FolderDialog {
         id: picker
-        title: "Yedeklenecek klasörü seç"
+        title: root.t("Choose a folder to back up")
         onAccepted: {
             destDialog.localPath = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
             destDialog.editName = ""
@@ -156,7 +161,7 @@ Window {
             root.api(editName ? "/api/edit" : "/api/add", body, function() { root.errorText = ""; root.refresh() })
             close()
         }
-        title: "kDrive'da nereye yedeklensin?"
+        title: root.t("Where in kDrive should it go?")
         modal: true
         parent: QQC.Overlay.overlay
         anchors.centerIn: parent
@@ -167,14 +172,14 @@ Window {
             QQC.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: "“" + destDialog.folderName + "” için buluttaki yeri seç. Klasör, seçtiğin yerin içinde kendi adıyla oluşturulur."
-                      + (destDialog.editName ? " Eski yerdeki kopya silinmez; dosyalar yeni yere yeniden yüklenir." : "")
+                text: "“" + destDialog.folderName + root.t("”: choose its place in the cloud. The folder is created inside the place you pick, under its own name.")
+                      + (destDialog.editName ? root.t(" The copy at the old place is not deleted; files are uploaded again to the new place.") : "")
             }
             RowLayout {
                 Layout.fillWidth: true
                 QQC.ToolButton {
                     icon.name: "go-up"
-                    text: "Yukarı"
+                    text: root.t("Up")
                     display: QQC.AbstractButton.IconOnly
                     enabled: destDialog.stack.length > 0
                     onClicked: { destDialog.stack = destDialog.stack.slice(0, -1); destDialog.load() }
@@ -199,7 +204,7 @@ Window {
                         anchors.centerIn: parent
                         visible: destList.count === 0
                         opacity: 0.6
-                        text: destDialog.loading ? "Yükleniyor…" : "Alt klasör yok"
+                        text: destDialog.loading ? root.t("Loading…") : root.t("No subfolders")
                     }
                     delegate: QQC.ItemDelegate {
                         required property var modelData
@@ -218,23 +223,23 @@ Window {
                 elide: Text.ElideMiddle
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: "Hedef: " + (destDialog.here ? destDialog.here + "/" : "") + destDialog.folderName
+                text: root.t("Destination: ") + (destDialog.here ? destDialog.here + "/" : "") + destDialog.folderName
             }
         }
         footer: QQC.DialogButtonBox {
             QQC.Button {
-                text: "Varsayılan yer (" + (root.st ? root.st.backup_root : "") + ")"
+                text: root.t("Default place (") + (root.st ? root.st.backup_root : "") + ")"
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.ActionRole
                 onClicked: destDialog.add(undefined)
             }
             QQC.Button {
-                text: "Buraya yedekle"
+                text: root.t("Back up here")
                 icon.name: "dialog-ok-apply"
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.AcceptRole
                 onClicked: destDialog.add(destDialog.here)
             }
             QQC.Button {
-                text: "Vazgeç"
+                text: root.t("Cancel")
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.RejectRole
                 onClicked: destDialog.close()
             }
@@ -243,7 +248,7 @@ Window {
 
     QQC.Dialog {
         id: confirmRemove
-        title: "Listeden çıkar"
+        title: root.t("Remove from list")
         modal: true
         parent: QQC.Overlay.overlay
         anchors.centerIn: parent
@@ -252,14 +257,14 @@ Window {
         QQC.Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "“" + root.pendingRemove + "” artık yedeklenmeyecek. Buluttaki kopya silinmez."
+            text: "“" + root.pendingRemove + root.t("” will no longer be backed up. The cloud copy is not deleted.")
         }
         onAccepted: root.api("/api/remove", { name: root.pendingRemove }, function() { root.refresh() })
     }
 
     QQC.Dialog {
         id: confirmLogout
-        title: "Hesaptan çık"
+        title: root.t("Sign out")
         modal: true
         parent: QQC.Overlay.overlay
         anchors.centerIn: parent
@@ -268,16 +273,16 @@ Window {
         QQC.Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "API token'ı bu bilgisayardan silinir ve kDrive klasörünün bağlantısı kesilir. "
-                + "Yedek listen, ayarların ve buluttaki dosyaların yerinde kalır.\n\n"
-                + "Ardından kurulum sihirbazı açılır; aynı ya da başka bir token'la yeniden bağlanabilirsin."
+            text: root.t("The API token is removed from this computer and the kDrive folder is disconnected. ")
+                + root.t("Your backup list, settings and cloud files stay as they are.\n\n")
+                + root.t("The setup wizard opens next; you can connect again with the same or another token.")
         }
         onAccepted: { root.view = "main"; root.api("/api/logout", {}, function() {}) }
     }
 
     QQC.Dialog {
         id: confirmFree
-        title: "Yalnızca bulutta tut"
+        title: root.t("Keep in cloud only")
         modal: true
         parent: QQC.Overlay.overlay
         anchors.centerIn: parent
@@ -286,10 +291,10 @@ Window {
         QQC.Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "“" + root.pendingFree + "” içindeki dosyalar bilgisayardan kaldırılır ve yalnızca bulutta kalır. "
-                + "Yerlerinde birer kısayol durur: dosyayı açtığında buluttan iner.\n\n"
-                + "Yalnızca bulutta birebir aynısı durduğu şimdi doğrulanan dosyalar kaldırılır; diğerleri yerinde kalır. "
-                + "Kaldırılanlar çöp kutusuna gider; disk alanı çöp kutusunu boşaltınca açılır."
+            text: "“" + root.pendingFree + root.t("”: its files are removed from this computer and stay only in the cloud. ")
+                + root.t("A shortcut stays in place of each: opening it downloads the file from the cloud.\n\n")
+                + root.t("Only files verified right now to have an identical copy in the cloud are removed; the rest stay. ")
+                + root.t("Removed files go to the trash; disk space is freed when you empty it.")
         }
         onAccepted: root.place(root.pendingFreePath, "cloud")
     }
@@ -304,6 +309,13 @@ Window {
             cfg = null
             root.api("/api/settings", undefined, function(j) {
                 settingsDialog.cfg = j
+                var langs = [{ code: "auto", name: root.t("Automatic (system language)") }, { code: "en", name: "English" }]
+                var names = { tr: "Türkçe" }
+                for (var i = 0; i < j.languages.length; i++)
+                    langs.push({ code: j.languages[i], name: names[j.languages[i]] || j.languages[i] })
+                langBox.model = langs
+                langBox.currentIndex = 0
+                for (var k = 0; k < langs.length; k++) if (langs[k].code === j.language) langBox.currentIndex = k
                 writableSwitch.checked = j.writable
                 deletesSwitch.checked = j.sync_deletes
                 autostartSwitch.checked = j.autostart
@@ -315,6 +327,7 @@ Window {
         }
         function save() {
             root.api("/api/settings", {
+                language: langBox.model[langBox.currentIndex].code,
                 writable: writableSwitch.checked,
                 sync_deletes: deletesSwitch.checked,
                 autostart: autostartSwitch.checked,
@@ -328,16 +341,16 @@ Window {
                 spacing: Kirigami.Units.largeSpacing
                 QQC.ToolButton {
                     icon.name: "go-previous"
-                    text: "Geri"
+                    text: root.t("Back")
                     onClicked: root.view = "main"
                 }
                 Kirigami.Heading {
                     Layout.fillWidth: true
                     level: 3
-                    text: "Ayarlar"
+                    text: root.t("Settings")
                 }
                 QQC.Button {
-                    text: "Kaydet"
+                    text: root.t("Save")
                     icon.name: "document-save"
                     highlighted: true
                     enabled: settingsDialog.cfg !== null
@@ -364,48 +377,48 @@ Window {
             width: settingsScroll.availableWidth - Kirigami.Units.gridUnit * 2
             enabled: settingsDialog.cfg !== null
             RowLayout {
-                Kirigami.FormData.label: "Hesap:"
+                Kirigami.FormData.label: root.t("Account:")
                 spacing: Kirigami.Units.largeSpacing
                 Kirigami.Icon { source: "folder-cloud"; implicitWidth: Kirigami.Units.iconSizes.small; implicitHeight: implicitWidth }
                 QQC.Label { text: settingsDialog.cfg ? settingsDialog.cfg.drive : "" }
                 QQC.Button {
-                    text: "Hesaptan çık…"
+                    text: root.t("Sign out…")
                     icon.name: "system-log-out"
                     onClicked: confirmLogout.open()
                 }
             }
             QQC.Switch {
                 id: autostartSwitch
-                Kirigami.FormData.label: "Başlangıç:"
-                text: "Oturum açılınca kendiliğinden başlat"
+                Kirigami.FormData.label: root.t("Startup:")
+                text: root.t("Start automatically at login")
             }
             QQC.Switch {
                 id: writableSwitch
-                Kirigami.FormData.label: "kDrive klasörü:"
-                text: "İçine dosya kaydetmeye ve düzenlemeye izin ver"
+                Kirigami.FormData.label: root.t("kDrive folder:")
+                text: root.t("Allow saving and editing files in it")
             }
             QQC.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: "Kapalıyken klasör salt okunurdur. Açıkken orada sildiğin dosya kDrive çöp kutusuna gider; taşıma ve yeniden adlandırma yapılamaz."
+                text: root.t("When off, the folder is read-only. When on, files you delete there go to the kDrive trash; moving and renaming are not possible.")
             }
             QQC.Switch {
                 id: deletesSwitch
-                Kirigami.FormData.label: "Silinen dosyalar:"
-                text: "Bilgisayarda sildiğim dosya buluttan da silinsin"
+                Kirigami.FormData.label: root.t("Deleted files:")
+                text: root.t("Also delete from the cloud what I delete on this computer")
             }
             QQC.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: "Buluttaki kopya kDrive çöp kutusuna gider, oradan geri alınabilir. Bir seferde 20'den fazla dosya ya da klasörün tamamı silinirse önce onay istenir."
+                text: root.t("The cloud copy goes to the kDrive trash and can be restored from there. If more than 20 files, or everything in a folder, are deleted at once, you are asked first.")
             }
             QQC.SpinBox {
                 id: cacheSpin
-                Kirigami.FormData.label: "Önbellek sınırı (GB):"
+                Kirigami.FormData.label: root.t("Cache limit (GB):")
                 from: 1; to: 4000
             }
             QQC.Label {
@@ -413,24 +426,24 @@ Window {
                 wrapMode: Text.WordWrap
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: "Buluttan açtığın dosyalar bu sınıra kadar diskte tutulur; aşılınca en eski açılanlar silinir."
+                text: root.t("Files you open from the cloud are kept on disk up to this limit; beyond it the least recently opened are removed.")
             }
             QQC.TextField {
                 id: rootField
-                Kirigami.FormData.label: "Varsayılan yedek yeri:"
+                Kirigami.FormData.label: root.t("Default backup place:")
                 Layout.fillWidth: true
             }
             RowLayout {
-                Kirigami.FormData.label: "Yedeklenmeyecekler:"
+                Kirigami.FormData.label: root.t("Not backed up:")
                 spacing: Kirigami.Units.largeSpacing
                 QQC.Button {
-                    text: "Listeyi düzenle…"
+                    text: root.t("Edit list…")
                     icon.name: "document-edit"
                     onClicked: root.api("/api/ignore/open", {}, function() {})
                 }
                 QQC.Label {
                     opacity: 0.7
-                    text: settingsDialog.cfg ? settingsDialog.cfg.exclude_count + " desen" : ""
+                    text: settingsDialog.cfg ? settingsDialog.cfg.exclude_count + root.t(" patterns") : ""
                 }
             }
             QQC.Label {
@@ -438,11 +451,16 @@ Window {
                 wrapMode: Text.WordWrap
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: ".gitignore gibi bir metin dosyası açılır: her satıra bir dosya ya da klasör adı. Kaydettiğinde birkaç saniye içinde uygulanır."
+                text: root.t("Opens a text file like .gitignore: one file or folder name per line. Applied within seconds after you save.")
+            }
+            QQC.ComboBox {
+                id: langBox
+                Kirigami.FormData.label: root.t("Language:")
+                textRole: "name"
             }
             QQC.SpinBox {
                 id: rescanSpin
-                Kirigami.FormData.label: "Güvenlik taraması (dakika):"
+                Kirigami.FormData.label: root.t("Safety rescan (minutes):")
                 from: 1; to: 1440
             }
             QQC.Label {
@@ -450,8 +468,8 @@ Window {
                 elide: Text.ElideMiddle
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: settingsDialog.cfg ? "Ayar dosyası: " + root.shortPath(settingsDialog.cfg.config_path)
-                                           + ". Kaydedince kdlite yeni ayarlarla yeniden başlar." : ""
+                text: settingsDialog.cfg ? root.t("Settings file: ") + root.shortPath(settingsDialog.cfg.config_path)
+                                           + root.t(". kdlite restarts with the new settings when you save.") : ""
             }
           }
         }
@@ -476,7 +494,7 @@ Window {
                 var j = null
                 try { j = JSON.parse(x.responseText) } catch (e) {}
                 if (x.status === 200) ok(j)
-                else root.errorText = (j && j.error) ? j.error : "kdlite'a ulaşılamadı"
+                else root.errorText = (j && j.error) ? j.error : root.t("Could not reach kdlite")
             }
             x.open("POST", root.base + path)
             x.setRequestHeader("Content-Type", "application/json")
@@ -493,7 +511,7 @@ Window {
         function loadFolders() {
             if (drives.length === 0) return
             post("/api/setup/folders", { token: tokenField.text, drive_id: drives[driveBox.currentIndex].id }, function(j) {
-                wizard.dirs = [{ id: 1, name: "Sürücünün tamamı" }].concat(j.dirs)
+                wizard.dirs = [{ id: 1, name: root.t("Entire drive") }].concat(j.dirs)
                 var pick = 0
                 for (var i = 0; i < wizard.dirs.length; i++) if (wizard.dirs[i].name === "Private") pick = i
                 rootBox.currentIndex = pick
@@ -518,14 +536,14 @@ Window {
             Kirigami.Heading {
                 Layout.fillWidth: true
                 horizontalAlignment: Text.AlignHCenter
-                text: wizard.done ? "Kurulum tamam" : "kdlite'ı kDrive'a bağla"
+                text: wizard.done ? root.t("Setup complete") : root.t("Connect kdlite to kDrive")
             }
             QQC.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 horizontalAlignment: Text.AlignHCenter
                 visible: wizard.done
-                text: "kdlite başlatılıyor…"
+                text: root.t("Starting kdlite…")
             }
             Kirigami.InlineMessage {
                 Layout.fillWidth: true
@@ -538,7 +556,7 @@ Window {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 visible: !wizard.done
-                text: "1. Infomaniak hesabında bir API token'ı oluştur (yetki: drive) ve buraya yapıştır. Token yalnızca bu bilgisayardaki ayar dosyasına kaydedilir."
+                text: root.t("1. Create an API token in your Infomaniak account (scope: drive) and paste it here. The token is stored only in the settings file on this computer.")
             }
             RowLayout {
                 Layout.fillWidth: true
@@ -547,13 +565,13 @@ Window {
                     id: tokenField
                     Layout.fillWidth: true
                     echoMode: TextInput.Password
-                    placeholderText: "API token'ı"
+                    placeholderText: root.t("API token")
                     enabled: !wizard.busy
                     onTextEdited: { wizard.drives = []; wizard.dirs = [] }
                     onAccepted: if (text.length > 0) wizard.connect()
                 }
                 QQC.Button {
-                    text: "Bağlan"
+                    text: root.t("Connect")
                     icon.name: "network-connect"
                     enabled: !wizard.busy && tokenField.text.length > 0
                     onClicked: wizard.connect()
@@ -562,7 +580,7 @@ Window {
             QQC.Button {
                 visible: !wizard.done
                 flat: true
-                text: "Token sayfasını tarayıcıda aç"
+                text: root.t("Open the token page in the browser")
                 icon.name: "internet-services"
                 onClicked: Qt.openUrlExternally("https://manager.infomaniak.com/v3/ng/accounts/token/list")
             }
@@ -571,14 +589,14 @@ Window {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 visible: !wizard.done && wizard.drives.length > 0
-                text: "2. Sürücüyü ve kdlite'ın göreceği klasörü seç. Yedekler de bu klasörün içine gider."
+                text: root.t("2. Choose the drive and the folder kdlite will see. Backups go inside this folder too.")
             }
             Kirigami.FormLayout {
                 Layout.fillWidth: true
                 visible: !wizard.done && wizard.drives.length > 0
                 QQC.ComboBox {
                     id: driveBox
-                    Kirigami.FormData.label: "Sürücü:"
+                    Kirigami.FormData.label: root.t("Drive:")
                     Layout.fillWidth: true
                     model: wizard.drives
                     textRole: "name"
@@ -586,7 +604,7 @@ Window {
                 }
                 QQC.ComboBox {
                     id: rootBox
-                    Kirigami.FormData.label: "Klasör:"
+                    Kirigami.FormData.label: root.t("Folder:")
                     Layout.fillWidth: true
                     model: wizard.dirs
                     textRole: "name"
@@ -596,7 +614,7 @@ Window {
                 Layout.alignment: Qt.AlignHCenter
                 visible: !wizard.done && wizard.dirs.length > 0
                 enabled: !wizard.busy
-                text: "Kurulumu bitir"
+                text: root.t("Finish setup")
                 icon.name: "dialog-ok-apply"
                 highlighted: true
                 onClicked: wizard.finish()
@@ -650,24 +668,24 @@ Window {
                     }
                 }
                 QQC.Button {
-                    text: root.paused ? "Sürdür" : "Duraklat"
+                    text: root.paused ? root.t("Resume") : root.t("Pause")
                     icon.name: root.paused ? "media-playback-start" : "media-playback-pause"
                     enabled: root.st !== null && root.reachable
                     onClicked: root.api("/api/pause", { on: !root.paused }, function() { root.refresh() })
-                    QQC.ToolTip.text: root.paused ? "Yedeklemeye kaldığı yerden devam et"
-                                                  : "Yüklemeyi durdur; “Sürdür”e basana kadar hiçbir şey gönderilmez"
+                    QQC.ToolTip.text: root.paused ? root.t("Continue backing up where it left off")
+                                                  : root.t("Stop uploading; nothing is sent until you press “Resume”")
                     QQC.ToolTip.visible: hovered
                     QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
                 QQC.Button {
-                    text: "Şimdi yedekle"
+                    text: root.t("Back up now")
                     icon.name: "cloud-upload"
                     enabled: root.reachable && !root.running && root.sources.length > 0
                     onClicked: root.api("/api/run", {}, function() { root.refresh() })
                 }
                 QQC.ToolButton {
                     icon.name: "configure"
-                    text: "Ayarlar"
+                    text: root.t("Settings")
                     display: QQC.AbstractButton.IconOnly
                     enabled: root.reachable && root.st !== null
                     QQC.ToolTip.text: text
@@ -710,11 +728,11 @@ Window {
                 text: {
                     var n = root.notice
                     if (!n) return ""
-                    var t = n.mode === "cloud" ? n.done + " dosya artık yalnızca bulutta (" + root.human(n.bytes) + ")."
-                          : n.mode === "both" ? n.done + " dosya artık bulutta ve bilgisayarda."
-                          : n.done + " dosya artık yalnızca bilgisayarda; buluttaki kopyalar kDrive çöp kutusunda."
-                    if (n.kept > 0) t += " " + n.kept + " dosya olduğu gibi bırakıldı."
-                    if (n.mode === "cloud" && n.done > 0) t += " Disk alanı, çöp kutusunu boşaltınca açılır."
+                    var t = n.mode === "cloud" ? n.done + root.t(" files are now in the cloud only (") + root.human(n.bytes) + ")."
+                          : n.mode === "both" ? n.done + root.t(" files are now in the cloud and on this computer.")
+                          : n.done + root.t(" files are now on this computer only; the cloud copies are in the kDrive trash.")
+                    if (n.kept > 0) t += " " + n.kept + root.t(" files were left as they are.")
+                    if (n.mode === "cloud" && n.done > 0) t += root.t(" Disk space is freed when you empty the trash.")
                     if (n.errors.length > 0) t += "\n" + n.errors.slice(0, 3).join("\n")
                     return t
                 }
@@ -728,10 +746,10 @@ Window {
                 Kirigami.Heading {
                     Layout.fillWidth: true
                     level: 4
-                    text: "Yedeklenen klasörler"
+                    text: root.t("Backed-up folders")
                 }
                 QQC.Button {
-                    text: "Klasör ekle…"
+                    text: root.t("Add folder…")
                     icon.name: "folder-add"
                     enabled: root.reachable
                     onClicked: {
@@ -755,8 +773,8 @@ Window {
                         width: parent.width - Kirigami.Units.gridUnit * 4
                         visible: list.count === 0 && root.st !== null
                         icon.name: "folder-cloud"
-                        text: "Liste boş"
-                        explanation: "“Klasör ekle…” ile yedeklemek istediğin klasörleri seç."
+                        text: root.t("The list is empty")
+                        explanation: root.t("Use “Add folder…” to choose the folders you want to back up.")
                     }
 
                     delegate: QQC.ItemDelegate {
@@ -767,11 +785,11 @@ Window {
                         readonly property var stats: modelData.last ? modelData.last.stats : null
                         readonly property int pendingDeletes: stats && stats.pending_deletes ? stats.pending_deletes : 0
                         readonly property bool active: root.running && root.st.progress.source === modelData.name
-                        readonly property string badge: active ? "Yedekleniyor" : !modelData.exists ? "Klasör bulunamadı"
-                            : root.paused ? "Duraklatıldı"
-                            : (modelData.last && modelData.last.error) ? "Hata"
-                            : (stats && stats.failed > 0) ? stats.failed + " dosya başarısız"
-                            : stats ? "Yedekli" : "Bekliyor"
+                        readonly property string badge: active ? root.t("Backing up") : !modelData.exists ? root.t("Folder not found")
+                            : root.paused ? root.t("Paused")
+                            : (modelData.last && modelData.last.error) ? root.t("Error")
+                            : (stats && stats.failed > 0) ? stats.failed + root.t(" files failed")
+                            : stats ? root.t("Backed up") : root.t("Waiting")
                         readonly property string emblem: active ? "state-sync" : !modelData.exists ? "emblem-warning"
                             : root.paused ? "emblem-pause" : bad ? "emblem-warning" : stats ? "emblem-checked" : ""
                         readonly property bool bad: !modelData.exists || (modelData.last && modelData.last.error) || (stats && stats.failed > 0)
@@ -817,10 +835,10 @@ Window {
                                 }
                                 QQC.Label {
                                     Layout.fillWidth: true
-                                    text: row.modelData.files + " dosya · " + root.human(row.modelData.bytes) + " bulutta"
-                                          + (row.modelData.cloud_only > 0 ? " · " + row.modelData.cloud_only + " yalnızca bulutta" : "")
-                                          + (row.modelData.local_only > 0 ? " · " + row.modelData.local_only + " yalnızca bilgisayarda" : "")
-                                          + (row.modelData.last ? "   ·   son kontrol " + root.ago(row.modelData.last.at) : "")
+                                    text: row.modelData.files + root.t(" files · ") + root.human(row.modelData.bytes) + root.t(" in the cloud")
+                                          + (row.modelData.cloud_only > 0 ? " · " + row.modelData.cloud_only + root.t(" cloud only") : "")
+                                          + (row.modelData.local_only > 0 ? " · " + row.modelData.local_only + root.t(" this computer only") : "")
+                                          + (row.modelData.last ? root.t("   ·   last check ") + root.ago(row.modelData.last.at) : "")
                                     opacity: 0.7
                                     font: Kirigami.Theme.smallFont
                                     elide: Text.ElideRight
@@ -835,18 +853,18 @@ Window {
                                         wrapMode: Text.WordWrap
                                         font: Kirigami.Theme.smallFont
                                         color: Kirigami.Theme.neutralTextColor
-                                        text: row.pendingDeletes + " dosya bilgisayardan silinmiş. Buluttan da silinsin mi?"
+                                        text: row.pendingDeletes + root.t(" files were deleted on this computer. Delete them from the cloud too?")
                                     }
                                     QQC.Button {
-                                        text: "Buluttan da sil"
+                                        text: root.t("Delete from cloud too")
                                         icon.name: "edit-delete"
                                         onClicked: root.api("/api/deletes", { name: row.modelData.name, apply: true }, function() { root.refresh() })
-                                        QQC.ToolTip.text: "kDrive çöp kutusuna taşınır; oradan geri alınabilir"
+                                        QQC.ToolTip.text: root.t("Moved to the kDrive trash; can be restored from there")
                                         QQC.ToolTip.visible: hovered
                                         QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
                                     }
                                     QQC.Button {
-                                        text: "Bulutta kalsın"
+                                        text: root.t("Keep in cloud")
                                         onClicked: root.api("/api/deletes", { name: row.modelData.name, apply: false }, function() { root.refresh() })
                                     }
                                 }
@@ -866,7 +884,7 @@ Window {
                             }
                             QQC.ToolButton {
                                 icon.name: "configure"
-                                text: "Buluttaki yeri değiştir"
+                                text: root.t("Change its place in the cloud")
                                 display: QQC.AbstractButton.IconOnly
                                 enabled: !root.running
                                 QQC.ToolTip.text: text
@@ -883,7 +901,7 @@ Window {
                             QQC.ToolButton {
                                 id: placeButton
                                 icon.name: "cloudstatus"
-                                text: "Dosyalar nerede dursun?"
+                                text: root.t("Where should the files be kept?")
                                 display: QQC.AbstractButton.IconOnly
                                 enabled: !root.running && row.modelData.exists && row.stats !== null
                                 QQC.ToolTip.text: text
@@ -893,7 +911,7 @@ Window {
                                 QQC.Menu {
                                     id: placeMenu
                                     QQC.MenuItem {
-                                        text: "Yalnızca bulutta tut"
+                                        text: root.t("Keep in cloud only")
                                         icon.name: "cloudstatus"
                                         onTriggered: {
                                             root.pendingFree = row.modelData.name
@@ -902,7 +920,7 @@ Window {
                                         }
                                     }
                                     QQC.MenuItem {
-                                        text: "Bulutta ve bilgisayarda tut"
+                                        text: root.t("Keep in cloud and on this computer")
                                         icon.name: "folder-cloud"
                                         onTriggered: root.place(row.modelData.local, "both")
                                     }
@@ -910,7 +928,7 @@ Window {
                             }
                             QQC.ToolButton {
                                 icon.name: "list-remove"
-                                text: "Listeden çıkar"
+                                text: root.t("Remove from list")
                                 display: QQC.AbstractButton.IconOnly
                                 QQC.ToolTip.text: text
                                 QQC.ToolTip.visible: hovered
@@ -925,7 +943,7 @@ Window {
 
         footer: QQC.ToolBar {
             contentItem: QQC.Label {
-                text: root.st ? "Değişen dosyanın eski hali kDrive sürüm geçmişinde durur. Dosya ya da klasöre sağ tıklayıp kdlite menüsünden nerede duracağını seçebilirsin."
+                text: root.st ? root.t("Older versions of changed files stay in kDrive version history. Right-click a file or folder and use the kdlite menu to choose where it is kept.")
                               : ""
                 wrapMode: Text.WordWrap
                 opacity: 0.7

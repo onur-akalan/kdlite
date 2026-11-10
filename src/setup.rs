@@ -5,6 +5,7 @@
 
 use crate::api::Api;
 use crate::config;
+use crate::tr;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
@@ -33,10 +34,10 @@ fn base_url() -> String {
 fn clean_token(t: &str) -> Result<String> {
     let t = t.trim();
     if t.is_empty() {
-        bail!("token boş");
+        bail!("{}", tr!("the token is empty"));
     }
     if t.len() > 512 || !t.chars().all(|c| c.is_ascii_alphanumeric() || "-_.~+/=".contains(c)) {
-        bail!("token geçersiz karakter içeriyor");
+        bail!("{}", tr!("the token contains invalid characters"));
     }
     Ok(t.to_string())
 }
@@ -44,9 +45,9 @@ fn clean_token(t: &str) -> Result<String> {
 fn explain(e: anyhow::Error) -> anyhow::Error {
     let s = format!("{:#}", e);
     if s.contains("HTTP 401") || s.contains("HTTP 403") {
-        anyhow!("token kabul edilmedi; kDrive yetkisiyle oluşturulduğundan emin ol")
+        anyhow!("{}", tr!("the token was not accepted; make sure it was created with the drive scope"))
     } else {
-        anyhow!("kDrive'a ulaşılamadı: {}", s)
+        anyhow!("{}", tr!("could not reach kDrive: {}", s))
     }
 }
 
@@ -86,7 +87,7 @@ fn save(path: &Path, token: &str, drive_id: u64, root_id: u64) -> Result<()> {
         .create_new(true)
         .mode(0o600)
         .open(&tmp)
-        .context("ayar dosyası yazılamadı")?;
+        .context(tr!("could not write the settings file"))?;
     f.write_all(text.as_bytes())?;
     drop(f);
     std::fs::rename(&tmp, path)?;
@@ -101,7 +102,7 @@ fn handle(path: &Path, url: &str, body: &Value) -> Result<Value> {
             let token = clean_token(s("token"))?;
             let drives = Api::new(&base_url(), 0, &token)?.drives().map_err(explain)?;
             if drives.is_empty() {
-                bail!("bu token hiçbir kDrive'a erişemiyor");
+                bail!("{}", tr!("this token cannot access any kDrive"));
             }
             Ok(json!({ "drives": drives.iter().map(|(id, name)| json!({ "id": id, "name": name })).collect::<Vec<_>>() }))
         }
@@ -121,7 +122,7 @@ fn handle(path: &Path, url: &str, body: &Value) -> Result<Value> {
             let token = clean_token(s("token"))?;
             let (drive, root) = (n("drive_id"), n("root_id").max(1));
             if drive == 0 {
-                bail!("sürücü seçilmedi");
+                bail!("{}", tr!("no drive selected"));
             }
             // Kaydetmeden once secimin calistigini dogrula.
             Api::new(&base_url(), drive, &token)?.list_dir(root).map_err(explain)?;
@@ -159,7 +160,7 @@ pub fn run(path: PathBuf, port: u16) -> Result<()> {
         let (code, out) = if !host_ok || (is_post && header("X-Kdlite").is_none()) {
             (403, json!({ "error": "gecersiz istek" }))
         } else if !is_post {
-            (200, json!({ "setup": true }))
+            (200, json!({ "setup": true, "lang": crate::i18n::lang() }))
         } else if url == "/api/quit" {
             let _ = req.respond(Response::from_string("{}"));
             return Ok(());

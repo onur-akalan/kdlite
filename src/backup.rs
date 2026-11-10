@@ -9,6 +9,7 @@
 
 use crate::api::{Api, Entry};
 use crate::config;
+use crate::tr;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -577,7 +578,7 @@ impl Backup<'_> {
                             log::warn!("buluttan silinemedi: {}/{}: {:#}", source.name, rel, e);
                             stats.failed += 1;
                             if stats.errors.len() < MAX_ERRORS {
-                                stats.errors.push(format!("{}: buluttan silinemedi: {:#}", rel, e));
+                                stats.errors.push(format!("{}: {}: {:#}", rel, tr!("could not delete from the cloud"), e));
                             }
                         }
                     }
@@ -646,7 +647,7 @@ impl Backup<'_> {
         let mut state = load_state()?;
         let mut rs = state.roots.remove(&source.name).unwrap_or_default();
         if rs.base.clone().unwrap_or_else(|| self.backup_root.clone()) != self.base_of(source) {
-            bail!("klasör henüz yeni yerine yedeklenmedi; yedekleme bitince yeniden dene");
+            bail!("{}", tr!("the folder is not backed up to its new place yet; try again when the backup finishes"));
         }
         let cloud_root = self.mountpoint.join(self.base_of(source)).join(&source.name);
         let mut items = Vec::new();
@@ -705,7 +706,7 @@ impl Backup<'_> {
         let (size, mtime) = (meta.len(), mtime_secs(&meta));
         let uploaded = rs.files.get(&item.rel).is_some_and(|r| r.size == size && r.mtime == mtime);
         if !uploaded {
-            bail!("henüz yedeklenmedi");
+            bail!("{}", tr!("not backed up yet"));
         }
         let (dir_rel, name) = match item.rel.rsplit_once('/') {
             Some((d, n)) => (d.to_string(), n),
@@ -727,11 +728,11 @@ impl Backup<'_> {
             .and_then(|l| l.get(name))
             .is_some_and(|r| !r.is_dir && r.size == size && r.mtime == mtime);
         if !in_cloud {
-            bail!("bulutta aynı haliyle bulunamadı");
+            bail!("{}", tr!("no identical copy found in the cloud"));
         }
         let target = cloud_root.join(&item.rel);
         if target.symlink_metadata().is_err() {
-            bail!("kDrive klasörü bağlı değil ya da dosya orada görünmüyor");
+            bail!("{}", tr!("the kDrive folder is not mounted or the file is not visible there"));
         }
         let _ = std::process::Command::new("gio")
             .arg("trash")
@@ -742,9 +743,9 @@ impl Backup<'_> {
             .stderr(std::process::Stdio::null())
             .status();
         if item.abs.symlink_metadata().is_ok() {
-            bail!("çöp kutusuna taşınamadı");
+            bail!("{}", tr!("could not be moved to the trash"));
         }
-        std::os::unix::fs::symlink(&target, &item.abs).context("kısayol oluşturulamadı")?;
+        std::os::unix::fs::symlink(&target, &item.abs).context(tr!("could not create the shortcut"))?;
         rs.cloud_only.insert(item.rel.clone());
         Ok(Some(size))
     }
@@ -758,14 +759,14 @@ impl Backup<'_> {
         if !rs.cloud_only.contains(&item.rel) {
             return Ok(None); // bizim olusturmadigimiz bir bag
         }
-        let rec = rs.files.get(&item.rel).cloned().ok_or_else(|| anyhow!("kayıt bulunamadı"))?;
+        let rec = rs.files.get(&item.rel).cloned().ok_or_else(|| anyhow!("{}", tr!("record not found")))?;
         let name = item.abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let tmp = item.abs.with_file_name(format!(".{}.kdlite.part", name));
-        std::fs::copy(cloud_root.join(&item.rel), &tmp).context("buluttan indirilemedi")?;
+        std::fs::copy(cloud_root.join(&item.rel), &tmp).context(tr!("could not download from the cloud"))?;
         let ok = std::fs::metadata(&tmp).is_ok_and(|m| m.len() == rec.size);
         if !ok {
             let _ = std::fs::remove_file(&tmp);
-            bail!("indirilen dosyanın boyutu uyuşmuyor");
+            bail!("{}", tr!("the downloaded file has the wrong size"));
         }
         // Buluttaki zamani koru ki dosya yeniden yuklenmesin.
         std::fs::OpenOptions::new()
@@ -790,7 +791,7 @@ impl Backup<'_> {
             match self.api.trash(rec.id) {
                 Ok(()) => {}
                 Err(e) if format!("{:#}", e).contains("HTTP 404") => {}
-                Err(e) => return Err(e.context("buluttan silinemedi")),
+                Err(e) => return Err(e.context(tr!("could not delete from the cloud"))),
             }
             rs.files.remove(&item.rel);
         } else if rs.local_only.contains(&item.rel) {

@@ -43,9 +43,16 @@ pub struct Config {
     /// silinsin mi.
     #[serde(default = "default_true")]
     pub sync_deletes: bool,
+    /// Interface language: "auto" (follow the system), "en", "tr"...
+    #[serde(default = "default_language")]
+    pub language: String,
     /// Yedeklemede atlanacak dosya ve klasor adlari ("*.ext", "onek*" ya da tam ad).
     #[serde(default = "default_exclude")]
     pub exclude: Vec<String>,
+}
+
+fn default_language() -> String {
+    "auto".into()
 }
 
 fn default_true() -> bool {
@@ -112,6 +119,9 @@ drive_id = 0
 # Baglanacak klasor. 1 = surucunun koku.
 root_id = 1
 
+# Arayuz dili / interface language: "auto" (sistem dili), "en", "tr".
+language = "auto"
+
 # Yedeklenen klasorde sildigin dosya buluttan da silinsin mi (kDrive cop
 # kutusuna gider, oradan geri alinabilir). false = bulutta kalir.
 sync_deletes = true
@@ -126,7 +136,7 @@ cache_max_gb = 20
 base_url = "https://api.infomaniak.com"
 dir_ttl_secs = 60
 
-# Yedekleme: buluttaki hedef (root_id klasorune gore). Bos ise "Yedekler/<bilgisayar adi>".
+# Yedekleme: buluttaki hedef (root_id klasorune gore). Bos ise "Backups/<bilgisayar adi>".
 # backup_root = "Yedekler/bilgisayarim"
 # Degisiklikler aninda yuklenir (inotify). rescan_secs: guvenlik icin tam tarama
 # araligi. backup_interval_secs: yalnizca izleme kurulamazsa kullanilan tarama araligi.

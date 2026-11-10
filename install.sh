@@ -28,8 +28,10 @@ cat > "$apps/kdlite.desktop" <<DESKTOP
 [Desktop Entry]
 Type=Application
 Name=kdlite
-GenericName=kDrive yedekleme
-Comment=kDrive'i baglar ve secilen klasorleri yedekler
+GenericName=Cloud drive client
+GenericName[tr]=Bulut sürücü istemcisi
+Comment=Mounts your cloud drive and backs up selected folders
+Comment[tr]=Bulut sürücünü bağlar ve seçilen klasörleri yedekler
 Exec=$bin/kdlite tray
 Icon=folder-cloud
 Categories=Utility;Network;
@@ -46,32 +48,38 @@ X-KDE-Submenu=kdlite
 Icon=folder-cloud
 
 [Desktop Action add]
-Name=Bu klasörü kDrive'a yedekle
+Name=Back up this folder
+Name[tr]=Bu klasörü yedekle
 Icon=cloud-upload
 Exec=$bin/kdlite menu add %f
 
 [Desktop Action sync]
-Name=Şimdi yedekle
+Name=Back up now
+Name[tr]=Şimdi yedekle
 Icon=view-refresh
 Exec=$bin/kdlite menu sync %f
 
 [Desktop Action remove]
-Name=Yedeklemeden çıkar
+Name=Stop backing up
+Name[tr]=Yedeklemeden çıkar
 Icon=list-remove
 Exec=$bin/kdlite menu remove %f
 
 [Desktop Action cloud]
-Name=Yalnızca bulutta tut
+Name=Keep in cloud only
+Name[tr]=Yalnızca bulutta tut
 Icon=cloudstatus
 Exec=$bin/kdlite menu cloud %F
 
 [Desktop Action both]
-Name=Bulutta ve bilgisayarda tut
+Name=Keep in cloud and on this computer
+Name[tr]=Bulutta ve bilgisayarda tut
 Icon=folder-cloud
 Exec=$bin/kdlite menu both %F
 
 [Desktop Action local]
-Name=Yalnızca bilgisayarda tut
+Name=Keep on this computer only
+Name[tr]=Yalnızca bilgisayarda tut
 Icon=computer
 Exec=$bin/kdlite menu local %F
 DESKTOP
@@ -85,17 +93,20 @@ X-KDE-Submenu=kdlite
 Icon=folder-cloud
 
 [Desktop Action cloud]
-Name=Yalnızca bulutta tut
+Name=Keep in cloud only
+Name[tr]=Yalnızca bulutta tut
 Icon=cloudstatus
 Exec=$bin/kdlite menu cloud %F
 
 [Desktop Action both]
-Name=Bulutta ve bilgisayarda tut
+Name=Keep in cloud and on this computer
+Name[tr]=Bulutta ve bilgisayarda tut
 Icon=folder-cloud
 Exec=$bin/kdlite menu both %F
 
 [Desktop Action local]
-Name=Yalnızca bilgisayarda tut
+Name=Keep on this computer only
+Name[tr]=Yalnızca bilgisayarda tut
 Icon=computer
 Exec=$bin/kdlite menu local %F
 DESKTOP

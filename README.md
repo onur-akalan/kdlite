@@ -1,179 +1,188 @@
 # kdlite
 
-kDrive için Linux istemcisi. İki işi var:
+A lightweight cloud drive client for Linux and KDE Plasma.
 
-1. **Bağlama (Lite Sync benzeri):** bulutun tamamı salt okunur bir klasör
-   olarak görünür, dosyalar açıldığında iner ve yerel önbellekte kalır.
-2. **Yedekleme:** seçilen yerel klasörler tek yönlü olarak kDrive'a akar.
+kdlite mounts your cloud drive as a regular folder, downloads files only when
+you open them, backs up the local folders you choose, and stays out of the way
+in the system tray. The whole service runs as a single process using about
+10 MB of memory.
 
-Güvenlik sınırları: bağlama yalnızca GET isteği kullanır ve salt okunurdur.
-Yedekleme yalnızca klasör oluşturur ve dosya yükler. Kodda silme, taşıma veya
-yeniden adlandırma isteği yoktur; yerel dosyalar yalnızca okunur.
+**Supported providers:** [Infomaniak kDrive](https://www.infomaniak.com/en/ksuite/kdrive).
+The provider layer is small and self-contained, and support for additional
+services is planned.
 
-## Kurulum
+[Türkçe README](README.tr.md)
+
+## Features
+
+- **On-demand mount.** Your drive appears under `~/kDrive-bulut`. Files are
+  fetched when opened and kept in a size-limited local cache; large files
+  stream and support seeking.
+- **Write support.** Save, edit and create folders directly in the mounted
+  drive. Edited files become new versions in the provider's version history.
+- **Folder backup.** Pick any local folder and choose where it lives in the
+  cloud. Changes are detected with inotify and uploaded within seconds; a
+  periodic rescan acts as a safety net.
+- **Per-file placement.** For every backed-up file, choose *cloud only*,
+  *cloud and this computer*, or *this computer only*. Cloud-only files leave
+  a shortcut in place and download when opened.
+- **Safe deletion.** Nothing is ever deleted permanently. Files removed
+  locally or in the mount are moved to the provider's trash, and bulk
+  deletions require confirmation.
+- **Desktop integration.** System tray icon with live status, a native
+  Qt Quick/Kirigami window, Dolphin context-menu actions and status emblems
+  on files, desktop notifications.
+- **Guided setup.** A first-run wizard connects your account, lists your
+  drives and writes the configuration for you.
+- **Small footprint.** Written in Rust. One process, roughly 10 MB of memory,
+  no measurable CPU use when idle. The window is a separate process that only
+  exists while it is open.
+- **Localized.** English and Turkish, following the system language.
+
+## Requirements
+
+- Linux with FUSE 3 (`fuse3`)
+- Rust toolchain (to build)
+- For the window: `qt6-declarative`, `kirigami`, `qqc2-desktop-style`
+- For trash and notifications: `glib2` (`gio`), `libnotify` (`notify-send`)
+- Optional, for Dolphin status emblems: `cmake`, `kio`
+
+Package names are for Arch Linux; other distributions ship the same
+components under similar names.
+
+## Installation
 
 ```bash
+git clone https://github.com/onur-akalan/kdlite.git
+cd kdlite
 cargo build --release
-./target/release/kdlite init
+./install.sh
 ```
 
-`~/.config/kdlite/config.toml` içine iki değer yazılır:
+`install.sh` links the binary into `~/.local/bin`, adds an application menu
+entry and installs the Dolphin context menu. Optional flags:
 
-- `token`: Infomaniak Manager'da oluşturulan, kDrive yetkili API token'ı
-- `drive_id`: web arayüzünde adres çubuğundaki `.../drive/<kimlik>/...` sayısı
+| Flag | Effect |
+|---|---|
+| `--autostart` | Start kdlite in the tray at login |
+| `--dolphin` | Build and install the Dolphin status-emblem plugin |
+| `--remove` | Uninstall (settings and cache are kept) |
 
-Dosyanın izinleri 600 olmalıdır; değilse kdlite çalışmayı reddeder.
+Nothing is installed system-wide and no root access is required.
 
-## Kullanım
+## Getting started
+
+Launch **kdlite** from the application menu, or run:
 
 ```bash
-kdlite ls                      # bağlantı testi: kökü listeler
-kdlite ls "03 Fotoğraflar"     # bir alt klasörü listeler
-kdlite mount                   # ~/kDrive-bulut altına bağlar, Ctrl-C ile ayrılır
-kdlite pin "01 Belgeler"       # klasörü her zaman yerelde tutar (çevrimdışı)
-kdlite unpin "01 Belgeler"
-kdlite status                  # önbellek kullanımı
+kdlite tray
 ```
 
-## Tepsi servisi ve pencere
+On first run the setup wizard asks for an API token. For kDrive, create one in
+the Infomaniak Manager under *Developer → API tokens* with the `drive` scope.
+The token is stored only in `~/.config/kdlite/config.toml`, readable by your
+user alone.
+
+After setup:
+
+- **Tray icon:** left-click opens the window; the menu offers pause/resume,
+  *Back up now* and a shortcut to the mounted drive.
+- **Window:** add folders to back up, choose their place in the cloud, see
+  status, and open *Settings*.
+- **Dolphin:** right-click a file or folder → **kdlite** to back it up, sync
+  it now, or choose where it is kept.
+
+## Where files are kept
+
+| Option | Result |
+|---|---|
+| Keep in cloud only | The local file is moved to the trash after its cloud copy is verified; a shortcut that opens the cloud file takes its place. |
+| Keep in cloud and on this computer | The file exists in both places and stays in sync. |
+| Keep on this computer only | The cloud copy is moved to the provider's trash and the file is no longer backed up. |
+
+## Safety model
+
+kdlite is designed so that a bug or a mistake cannot silently destroy data:
+
+- There is no permanent-delete request anywhere in the code. Deletions go to
+  the provider's trash and can be restored from there.
+- A local file is only removed after an identical copy is confirmed in the
+  cloud at that moment.
+- If more than 20 files, or everything in a backed-up folder, disappear at
+  once (an unmounted disk, an accidental `rm -r`), nothing is deleted in the
+  cloud until you confirm.
+- Overwritten files remain available through the provider's version history.
+- Files written to the mount are staged on disk and retried until uploaded,
+  including after a restart.
+- Moving and renaming existing cloud items is not supported yet and is
+  refused rather than emulated.
+
+## Configuration
+
+Settings are available in the window. They are stored in
+`~/.config/kdlite/config.toml`:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `mountpoint` | `~/kDrive-bulut` | Where the drive is mounted |
+| `writable` | `true` | Allow writing to the mounted drive |
+| `sync_deletes` | `true` | Propagate local deletions to the cloud trash |
+| `cache_max_gb` | `20` | Size limit of the download cache |
+| `backup_root` | `Backups/<hostname>` | Default cloud location for backups |
+| `rescan_secs` | `3600` | Interval of the full safety rescan |
+| `language` | `auto` | Interface language (`auto`, `en`, `tr`) |
+
+Names that should never be backed up are listed one per line in
+`~/.config/kdlite/ignore`, in the spirit of `.gitignore` (`node_modules`,
+`*.tmp`, `.Trash-*`). Changes apply within seconds.
+
+## Command line
+
+Everything the interface does is also available from the terminal:
 
 ```bash
-./install.sh               # ~/.local/bin/kdlite ve uygulama menüsü kaydı
-./install.sh --autostart   # ayrıca oturum açılışında tepside başlat
-kdlite tray                # servisi başlatır ve pencereyi açar
-kdlite tray --hidden       # yalnızca tepsi
-kdlite window              # çalışan servisin penceresini açar
-kdlite quit                # servisi kapatır, bağlantıyı ayırır
+kdlite backup add ~/Documents   # add a folder to the backup list
+kdlite backup run               # scan and upload once
+kdlite backup verify            # check every local file exists in the cloud
+kdlite pause                    # pause / resume the running service
+kdlite ls "Photos/2024"         # list a cloud folder without mounting
+kdlite --help
 ```
 
-`kdlite tray` tek bir süreçtir: kDrive bağlantısı, otomatik yedekleme, yerel
-API (yalnızca 127.0.0.1) ve KDE tepsi simgesi. Boşta yaklaşık 10 MB kullanır.
-Bağlantı kurulamazsa (örneğin açılışta ağ yokken) dakikada bir yeniden dener.
+## How it works
 
-Pencere ayrı bir süreçtir (`qml6`, Kirigami ile yerel KDE görünümü), yalnızca
-açıkken ~57 MB kullanır. Tepsi simgesine sol tık açar ve kapatır. Gereken
-paketler: `qt6-declarative`, `kirigami`, `qqc2-desktop-style`.
+- **Mount:** a FUSE filesystem built on `fuser`. Directory listings are
+  cached briefly; file contents are downloaded to `~/.cache/kdlite` on first
+  read, with range requests for seeking in large files.
+- **Backup:** a one-way uploader that tracks size and modification time per
+  file. Large files use chunked upload sessions and are streamed from disk.
+- **Service:** `kdlite tray` hosts the mount, the backup engine, the tray
+  icon and a local HTTP API bound to `127.0.0.1` that the window and the
+  context menu talk to.
+- **Providers:** all provider-specific requests are isolated in `src/api.rs`.
 
-Tepsi simgesindeki rozet durumu gösterir: onay (her şey yedekli), eşitleme
-(yükleniyor), duraklatma, uyarı (yüklenemeyen dosya var), çevrimdışı (kDrive
-bağlı değil). `kdlite pause` / `kdlite resume` ya da tepsi menüsü ve
-penceredeki düğme yedeklemeyi duraklatır ve sürdürür; durum yeniden
-başlatmada korunur. Duraklatınca o an yüklenen dosya biter, sıradakine
-geçilmez.
+## Translations
 
-Dolphin'de bir klasöre sağ tık → **kdlite** altında "Bu klasörü kDrive'a
-yedekle" ve "Yedeklemeden çıkar" bulunur (`install.sh` kurar; sonuç masaüstü
-bildirimiyle gösterilir).
+The source language is English. Translations are JSON files in `lang/`
+mapping English text to the translated text (`lang/tr.json`). To add a
+language, copy that file, translate the values and register it in
+`src/i18n.rs`.
 
-**Dosya nerede dursun** (Dolphin'de sağ tık → kdlite, ya da penceredeki bulut
-düğmesi):
+## Roadmap
 
-- *Yalnızca bulutta tut*: bulutta birebir durduğu o an doğrulanan yerel dosya
-  çöp kutusuna gider (`gio trash`), yerine `~/kDrive-bulut` içindeki dosyayı
-  gösteren bir kısayol (sembolik bağ) kalır; açınca buluttan iner.
-- *Bulutta ve bilgisayarda tut*: kısayolun yerine dosya geri indirilir;
-  yalnızca bilgisayarda olan dosya yeniden yedeklenir.
-- *Yalnızca bilgisayarda tut*: buluttaki kopya kDrive çöp kutusuna gider ve
-  dosya bir daha yedeklenmez.
+- Additional storage providers
+- Move and rename inside the mounted drive
+- Two-way folder sync
+- Packaging for common distributions
 
-**Silme** (`sync_deletes = true`): yedeklenen klasörde silinen dosyanın (ya da
-kısayolun) buluttaki kopyası kDrive çöp kutusuna taşınır; oradan geri alınabilir.
-Bir seferde 20'den fazla dosya ya da klasördeki her şey silinmiş görünürse
-(bağlanmamış disk gibi bir hata olabilir) önce pencerede onay istenir. Özellik
-açıldığı ilk taramada, daha önce silinmiş dosyalar buluttan silinmez. Boş kalan
-bulut klasörleri silinmez. `~/kDrive-bulut` içinde silinen dosya ve boş klasör
-de kDrive çöp kutusuna gider. Kalıcı silme hiçbir yerde yoktur.
+Contributions and issue reports are welcome.
 
-**İlk kurulum:** ayar dosyası yokken `kdlite tray` bir sihirbaz açar: token'ı
-yapıştırırsın, sürücüyü ve kök klasörü seçersin; `config.toml` 600 izinle
-yazılır ve servis kendiliğinden başlar. (`kdlite init` ile elle de yazılabilir.)
+## Disclaimer
 
-**Buluttaki yer:** "Klasör ekle…" yerel klasörden sonra kDrive'daki hedefi
-sorar. Seçilen bulut klasörünün içinde yerel klasörün adıyla bir klasör
-oluşturulur. "Varsayılan yer" `Yedekler/<bilgisayar adı>` olur. Hedefi
-değiştirmek için klasörü listeden çıkarıp yeniden ekle; eski yerdeki kopya
-silinmez.
+kdlite is an independent project. It is not affiliated with, endorsed by or
+supported by Infomaniak Network SA. kDrive is a product of Infomaniak
+Network SA.
 
-**Dolphin rozetleri:** `./install.sh --dolphin` küçük bir eklenti derleyip
-kurar (`dolphin/`, C++; `cmake` ve `kio` gerekir). Yedeklenen klasörlerdeki
-dosyaların simgesinde durum görünür: yeşil onay (bulutta), eşitleme (yüklenmeyi
-bekliyor), duraklatma, uyarı. Alt klasörlerde ve hariç tutulan dosyalarda rozet
-yoktur. Eklenti yalnızca `~/.config/kdlite` altındaki durum dosyalarını okur.
-Qt'nin kullanıcı klasöründeki eklentiyi görmesi için betik
-`~/.config/plasma-workspace/env/kdlite.sh` dosyasına `QT_PLUGIN_PATH` yazar;
-oturumu kapatıp açınca etkin olur.
+## License
 
-**Bulut klasörüne yazma** (`writable = true`, varsayılan): `~/kDrive-bulut`
-içine dosya kaydedilebilir, var olan dosya düzenlenebilir, klasör
-oluşturulabilir. Yazılan dosya önce yerelde bekler (`~/.cache/kdlite/staged`),
-kapandıktan 5 saniye sonra yüklenir; düzenlenen dosyanın eski hali kDrive sürüm
-geçmişinde kalır. Henüz yüklenmemiş dosya silinebilir ve yeniden
-adlandırılabilir; var olan bir dosyanın üzerine taşınırsa (düzenleyicilerin
-"geçici dosyaya yaz, üzerine taşı" kaydı) onun yeni sürümü olur. Yedeklenmeyecekler
-listesindeki adlar (kilit ve geçici dosyalar) hiç yüklenmez. Buluttaki bir
-dosyayı ya da klasörü taşımak, yeniden adlandırmak reddedilir (EPERM).
-Yüklenemeyen dosya diskte kalır, dakikada bir ve sonraki açılışta yeniden denenir.
-
-**Ayarlar:** penceredeki dişli düğmesi ayarlar sayfasını açar (otomatik
-başlatma, yazma izni, önbellek sınırı, varsayılan yedek yeri, güvenlik taraması).
-Kaydedince servis yeni ayarlarla yeniden başlar. "Yedeklenmeyecekler" listesi
-`~/.config/kdlite/ignore` dosyasıdır (.gitignore gibi, satır başına bir ad);
-"Listeyi düzenle…" onu metin düzenleyicide açar, kaydedilince birkaç saniyede
-uygulanır. Her klasörün yanındaki dişli, o klasörün buluttaki yerini değiştirir.
-
-Aynı arayüz tarayıcıdan da açılabilir: `http://127.0.0.1:47800/`.
-
-## Yedekleme
-
-```bash
-kdlite backup add ~/Documents          # listeye ekler
-kdlite backup add ~/notlar --name Notlar
-kdlite backup list
-kdlite backup run                      # bir kez tarar ve yükler
-kdlite backup watch                    # sürekli: backup_interval_secs'te bir tarar
-kdlite backup verify                   # yereldeki her dosya bulutta aynı boyutla var mı
-kdlite backup remove Documents         # listeden çıkarır, buluttakine dokunmaz
-```
-
-- Servis (`kdlite tray`) yedeklenen klasörleri inotify ile izler: dosya
-  oluşturulunca ya da değişince, yazım bittikten birkaç saniye sonra yalnızca
-  o yedek taranıp yüklenir. Güvenlik için açılışta ve `rescan_secs` (3600)
-  aralığıyla tam tarama yapılır. Hariç tutulan klasörler izlenmez. İzleme
-  kurulamazsa `backup_interval_secs` aralığıyla taramaya dönülür.
-- Hedef: `Yedekler/<bilgisayar adı>/<ad>` (ayarda `backup_root` ile değişir).
-- Değişen dosya aynı adla yeniden
-  yüklenir, eski hali kDrive sürüm geçmişinde durur.
-- Dosyanın değişiklik zamanı korunur. Durum dosyası kaybolsa bile bulutta
-  aynı boyut ve zamanla duran dosyalar yeniden yüklenmez.
-- 100 MB üstü dosyalar parçalı yüklenir.
-- Atlananlar: `.git`, `node_modules`, `.venv`, `__pycache__`, geçici dosyalar,
-  `CACHEDIR.TAG` içeren klasörler (örneğin cargo `target`), sembolik bağlar.
-  Liste ayarda `exclude` ile değiştirilebilir.
-- Son 3 saniyede değişmiş dosyalar bir sonraki taramaya bırakılır.
-
-## Nasıl çalışır
-
-- Klasör listeleri `dir_ttl_secs` (varsayılan 60 sn) boyunca bellekte tutulur.
-- Bir dosya ilk okunduğunda arka planda baştan sona indirilir; okuma, ihtiyaç
-  duyduğu kısım gelir gelmez devam eder. İleri sarmada sunucu destekliyorsa
-  doğrudan aralık isteği yapılır.
-- Önbellek `cache_max_gb` sınırını aşınca en eski kullanılan dosyalar silinir.
-  Açık dosyalar ve sabitlenenler silinmez.
-- Sabitlenen yollar bağlantı açılınca ve 10 dakikada bir eşitlenir. Diskte
-  10 GB'tan az yer kalırsa sabitleme indirmeleri durur.
-- İnternet yokken: daha önce listelenmiş klasörler ve önbellekteki dosyalar
-  erişilebilir kalır, diğerleri G/Ç hatası verir.
-
-## Bilinen sınırlar
-
-- Bağlanan klasöre yazılamaz (bilerek); buluta veri yalnızca yedeklemeyle gider.
-- Yedekleme değişiklikleri anında değil, tarama aralığında fark eder.
-- Boş klasörler yedeklenmez.
-- Buluttaki değişiklikler en geç `dir_ttl_secs` sonra görünür.
-- Klasör listeleri yeniden başlatmalar arasında saklanmaz.
-
-## Lisans
-
-MIT. Ayrıntı için `LICENSE` dosyasına bak.
-
-Bu proje Infomaniak ile bağlantılı değildir; kDrive, Infomaniak Network SA’nın ürünüdür.
+MIT. See [LICENSE](LICENSE).

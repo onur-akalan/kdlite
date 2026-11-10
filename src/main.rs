@@ -1,4 +1,5 @@
 mod api;
+mod i18n;
 mod backup;
 mod cache;
 mod config;
@@ -18,9 +19,9 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "kdlite", version, about = "kDrive'i istege bagli indirmeyle baglayan salt okunur istemci")]
+#[command(name = "kdlite", version, about = "Lightweight cloud drive client for Linux: on-demand mount, folder backup, system tray")]
 struct Cli {
-    /// Ayar dosyasi (varsayilan: ~/.config/kdlite/config.toml)
+    /// Config file (default: ~/.config/kdlite/config.toml)
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -29,67 +30,67 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Ornek ayar dosyasi olusturur
+    /// Create a sample config file
     Init,
-    /// Surucuyu baglar (on planda calisir; Ctrl-C ile ayrilir)
+    /// Mount the drive in the foreground (Ctrl-C to unmount)
     Mount,
-    /// Baglamadan bir klasoru listeler (baglanti testi icin)
+    /// List a cloud folder without mounting (connection test)
     Ls {
-        /// Koke gore yol; bos birakilirsa kok
+        /// Path relative to the root; empty for the root
         path: Option<String>,
-        /// Yol yerine dogrudan klasor kimligi
+        /// Folder id instead of a path
         #[arg(long)]
         id: Option<u64>,
     },
-    /// Bir dosya ya da klasoru her zaman yerelde tutulacak sekilde sabitler
+    /// Pin a cloud file or folder so it is always kept in the local cache
     Pin { path: String },
-    /// Sabitlemeyi kaldirir
+    /// Unpin a path
     Unpin { path: String },
-    /// Sabitlenen yollari listeler
+    /// List pinned paths
     Pins,
-    /// Onbellek kullanimini gosterir
+    /// Show cache usage
     Status,
-    /// Token'in erisebildigi suruculeri listeler
+    /// List the drives the token can access
     Drives,
-    /// kDrive cop kutusundaki son ogeleri listeler
+    /// List the most recent items in the cloud trash
     TrashLs,
-    /// Tarayicida acilan arayuz: klasor secme, durum, otomatik yedekleme
+    /// Serve the fallback web interface
     Ui {
         #[arg(long, default_value_t = 47800)]
         port: u16,
-        /// Tarayiciyi kendiliginden acma
+        /// Do not open the browser
         #[arg(long)]
         no_open: bool,
     },
-    /// Servis: baglanti + otomatik yedekleme + sistem tepsisi simgesi (tek surec)
+    /// Run the service: mount, automatic backup and system tray icon (single process)
     Tray {
         #[arg(long, default_value_t = 47800)]
         port: u16,
-        /// Pencereyi acmadan yalnizca tepside basla (oturum acilisi icin)
+        /// Start in the tray only, without opening the window (for autostart)
         #[arg(long)]
         hidden: bool,
     },
-    /// Calisan servisin yonetim penceresini acar
+    /// Open the window of the running service
     Window {
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
-    /// Calisan servisi kapatir (baglantiyi ayirir)
+    /// Stop the running service (unmounts the drive)
     Quit {
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
-    /// Calisan servisin yedeklemesini duraklatir
+    /// Pause backups in the running service
     Pause {
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
-    /// Duraklatilan yedeklemeyi surdurur
+    /// Resume paused backups
     Resume {
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
-    /// Dosya yoneticisinin sag tik menusu icin: klasoru yedege ekler / cikarir
+    /// For the file manager context menu
     #[command(hide = true)]
     Menu {
         /// add | remove | sync | cloud | both | local
@@ -99,7 +100,7 @@ enum Cmd {
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
-    /// Yerel klasorleri kDrive'a tek yonlu yedekler
+    /// Back up local folders to the cloud (one-way)
     Backup {
         #[command(subcommand)]
         cmd: BackupCmd,
@@ -108,22 +109,22 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum BackupCmd {
-    /// Bir klasoru yedeklenecekler listesine ekler
+    /// Add a folder to the backup list
     Add {
         path: PathBuf,
-        /// Buluttaki adi (varsayilan: klasorun adi)
+        /// Name in the cloud (default: the folder's name)
         #[arg(long)]
         name: Option<String>,
     },
-    /// Bir klasoru listeden cikarir (buluttaki yedek silinmez)
+    /// Remove a folder from the backup list (the cloud copy is kept)
     Remove { name: String },
-    /// Yedeklenen klasorleri listeler
+    /// List backed-up folders
     List,
-    /// Bir kez tarar, eksik ve degismis dosyalari yukler
+    /// Scan once and upload new and changed files
     Run,
-    /// Surekli calisir: belirli araliklarla tarar ve yukler
+    /// Run continuously: scan and upload at intervals
     Watch,
-    /// Yerel dosyalarin bulutta ayni boyutla durdugunu dogrular
+    /// Verify that every local file exists in the cloud with the same size
     Verify,
 }
 
@@ -292,7 +293,7 @@ fn make_backup(c: &Ctx) -> backup::Backup<'_> {
             .backup_root
             .clone()
             .filter(|r| !r.trim_matches('/').is_empty())
-            .unwrap_or_else(|| format!("Yedekler/{}", backup::hostname())),
+            .unwrap_or_else(|| format!("Backups/{}", backup::hostname())),
         exclude: c.cfg.exclude.clone(),
         progress: None,
         cancel: None,
@@ -458,11 +459,11 @@ fn post(port: u16, path: &str, body: serde_json::Value) -> Result<serde_json::Va
         .header("Content-Type", "application/json")
         .body(body.to_string())
         .send()
-        .map_err(|_| anyhow::anyhow!("kdlite çalışmıyor; önce uygulama menüsünden başlatın"))?;
+        .map_err(|_| anyhow::anyhow!("{}", tr!("kdlite is not running; start it from the application menu first")))?;
     let ok = resp.status().is_success();
     let v: serde_json::Value = resp.json().unwrap_or(serde_json::Value::Null);
     if !ok {
-        bail!("{}", v.get("error").and_then(|e| e.as_str()).unwrap_or("istek başarısız"));
+        bail!("{}", v.get("error").and_then(|e| e.as_str()).map(str::to_string).unwrap_or_else(|| tr!("Request failed")));
     }
     Ok(v)
 }
@@ -477,7 +478,7 @@ fn notify(icon: &str, title: &str, text: &str) {
 fn confirm(title: &str, text: &str, yes: &str) -> bool {
     let out = std::process::Command::new("notify-send")
         .args(["-a", "kdlite", "-i", "dialog-warning", "-u", "critical", "--wait", "-t", "60000"])
-        .args(["-A", &format!("yes={}", yes), "-A", "no=Vazgeç", title, text])
+        .args(["-A", &format!("yes={}", yes), "-A", &format!("no={}", tr!("Cancel")), title, text])
         .output();
     out.is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "yes")
 }
@@ -487,15 +488,15 @@ fn cmd_place(mode: &str, paths: &[PathBuf], port: u16) -> Result<()> {
     let what = if paths.len() == 1 {
         format!("“{}”", paths[0].file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
     } else {
-        format!("{} öğe", paths.len())
+        tr!("{} items", paths.len())
     };
     // Buluttan silme: tek dosya disinda once onay al.
     let many = paths.len() > 1 || paths.iter().any(|p| p.symlink_metadata().is_ok_and(|m| m.is_dir()));
     if mode == "local" && many {
         let ok = confirm(
-            &format!("{} yalnızca bilgisayarda kalsın mı?", what),
-            "Buluttaki kopyalar kDrive çöp kutusuna taşınır ve bu dosyalar artık yedeklenmez.",
-            "Buluttan sil",
+            &tr!("Keep {} on this computer only?", what),
+            &tr!("The cloud copies are moved to the kDrive trash and these files are no longer backed up."),
+            &tr!("Delete from cloud"),
         );
         if !ok {
             return Ok(());
@@ -512,18 +513,30 @@ fn cmd_place(mode: &str, paths: &[PathBuf], port: u16) -> Result<()> {
     };
     let n = |k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
     let (icon, title, text) = match mode {
-        "cloud" => ("cloudstatus", "Yalnızca bulutta", "dosya artık yalnızca bulutta. Yerel kopyalar çöp kutusunda; boşaltınca yer açılır."),
-        "both" => ("folder-cloud", "Bulutta ve bilgisayarda", "dosya artık iki yerde de duruyor."),
-        _ => ("computer", "Yalnızca bilgisayarda", "dosya artık yalnızca bilgisayarda. Buluttaki kopyalar kDrive çöp kutusunda."),
+        "cloud" => (
+            "cloudstatus",
+            tr!("Cloud only"),
+            tr!("{} files are now in the cloud only. Local copies are in the trash; empty it to free space.", n("done")),
+        ),
+        "both" => (
+            "folder-cloud",
+            tr!("Cloud and this computer"),
+            tr!("{} files are now kept in both places.", n("done")),
+        ),
+        _ => (
+            "computer",
+            tr!("This computer only"),
+            tr!("{} files are now on this computer only. The cloud copies are in the kDrive trash.", n("done")),
+        ),
     };
-    let mut body = format!("{} {}", n("done"), text);
+    let mut body = text;
     if n("kept") > 0 {
-        body.push_str(&format!("\n{} dosya olduğu gibi bırakıldı.", n("kept")));
+        body.push_str(&format!("\n{}", tr!("{} files were left as they are.", n("kept"))));
     }
     if let Some(e) = v.get("errors").and_then(|e| e.as_array()).and_then(|a| a.first()).and_then(|e| e.as_str()) {
         body.push_str(&format!("\n{}", e));
     }
-    notify(if n("done") > 0 { icon } else { "dialog-information" }, title, &body);
+    notify(if n("done") > 0 { icon } else { "dialog-information" }, &title, &body);
     Ok(())
 }
 
@@ -533,17 +546,17 @@ fn cmd_menu(action: &str, path: &std::path::Path, port: u16) -> Result<()> {
     let label = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string());
     let res = match action {
         "add" => post(port, "/api/add", serde_json::json!({ "path": p }))
-            .map(|_| ("cloud-upload", format!("“{}” yedekleniyor", label), "Değişiklikler kendiliğinden kDrive'a akacak.")),
+            .map(|_| ("cloud-upload", tr!("Backing up “{}”", label), tr!("Changes will flow to kDrive on their own."))),
         "remove" => post(port, "/api/remove", serde_json::json!({ "path": p }))
-            .map(|_| ("list-remove", format!("“{}” artık yedeklenmiyor", label), "Buluttaki kopya silinmedi.")),
+            .map(|_| ("list-remove", tr!("“{}” is no longer backed up", label), tr!("The cloud copy was not deleted."))),
         "sync" => post(port, "/api/run", serde_json::json!({ "path": p })).map(|v| {
             let name = v.get("name").and_then(|n| n.as_str()).unwrap_or(&label).to_string();
-            ("cloud-upload", format!("“{}” şimdi yedekleniyor", name), "Değişen dosyalar kDrive'a yükleniyor.")
+            ("cloud-upload", tr!("Backing up “{}” now", name), tr!("Changed files are being uploaded to kDrive."))
         }),
         _ => bail!("bilinmeyen islem: {}", action),
     };
     match res {
-        Ok((icon, title, text)) => notify(icon, &title, text),
+        Ok((icon, title, text)) => notify(icon, &title, &text),
         Err(e) => notify("dialog-warning", &format!("“{}”", label), &format!("{:#}", e)),
     }
     Ok(())
@@ -554,6 +567,13 @@ fn main() -> Result<()> {
         .format_timestamp_secs()
         .init();
     let cli = Cli::parse();
+    // Language: the `language` setting if present, otherwise the system locale.
+    let cfg_file = cli.config.clone().unwrap_or_else(config::default_path);
+    let pref = std::fs::read_to_string(&cfg_file)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| t.get("language").and_then(|v| v.as_str()).map(str::to_string));
+    i18n::init(pref.as_deref());
     match cli.cmd {
         Cmd::Init => cmd_init(&cli.config),
         Cmd::Mount => cmd_mount(ctx(&cli.config)?),
