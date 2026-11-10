@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kdlite · Yedekleme</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f4f5f7; --surface: #ffffff; --text: #1b1f24; --muted: #667080;
+    --line: #e1e4e9; --accent: #0b7a75; --accent-text: #ffffff; --accent-soft: #e2f3f1;
+    --danger: #b3261e; --danger-soft: #fbe9e7; --warn: #8a5a00; --warn-soft: #fff3d6;
+    --hover: #f0f2f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14171a; --surface: #1d2126; --text: #e6e8eb; --muted: #98a1ad;
+      --line: #2e343b; --accent: #3fb8b0; --accent-text: #06201f; --accent-soft: #17332f;
+      --danger: #ff8a80; --danger-soft: #3a1f1d; --warn: #f2c261; --warn-soft: #3a2f14;
+      --hover: #252a30;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  }
+  main { max-width: 880px; margin: 0 auto; padding: 28px 16px 64px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  h2 { font-size: 15px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .grow { flex: 1 1 200px; min-width: 0; }
+  button {
+    font: inherit; border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--hover); }
+  button:disabled { opacity: .5; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); font-weight: 600; padding: 8px 16px; }
+  button.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
+  button.small { padding: 3px 10px; font-size: 13px; }
+  button.danger { color: var(--danger); }
+  .bar { height: 8px; background: var(--line); border-radius: 99px; overflow: hidden; margin-top: 12px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .mono { font-family: ui-monospace, "JetBrains Mono", "Cascadia Mono", monospace; font-size: 13px; }
+  .clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .src { padding: 12px 0; border-top: 1px solid var(--line); }
+  .src:first-of-type { border-top: 0; padding-top: 4px; }
+  .src .name { font-weight: 600; }
+  .badge { display: inline-block; font-size: 12px; padding: 1px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .badge.bad { background: var(--danger-soft); color: var(--danger); }
+  .badge.dim { background: var(--hover); color: var(--muted); }
+  .empty { color: var(--muted); padding: 8px 0; }
+  .tree { margin-top: 10px; border: 1px solid var(--line); border-radius: 8px; max-height: 460px; overflow: auto; }
+  .node { display: flex; align-items: center; gap: 6px; padding: 4px 10px; min-height: 34px; }
+  .node:hover { background: var(--hover); }
+  .node.dim .label { color: var(--muted); }
+  .twist { width: 22px; height: 22px; padding: 0; border: 0; background: none; color: var(--muted); border-radius: 4px; flex: none; }
+  .twist.leaf { visibility: hidden; }
+  .label { flex: 1 1 auto; min-width: 0; }
+  .errors { margin: 8px 0 0; padding-left: 18px; color: var(--danger); font-size: 13px; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 14px; max-width: 90vw; display: none; }
+  label.check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .stats { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin-top: 2px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>kdlite yedekleme</h1>
+    <span class="sub">Seçtiğin klasörler kDrive'da <span class="mono" id="target">…</span> altına akar</span>
+  </header>
+
+  <section class="card">
+    <div class="row">
+      <div class="grow">
+        <h2 id="status-title">Yükleniyor…</h2>
+        <div class="sub clip" id="status-detail"></div>
+      </div>
+      <label class="check"><input type="checkbox" id="auto"> Otomatik yedekle</label>
+      <button class="primary" id="run">Şimdi yedekle</button>
+    </div>
+    <div class="bar" id="bar" hidden><div></div></div>
+  </section>
+
+  <section class="card">
+    <h2>Yedeklenen klasörler</h2>
+    <div class="sub">Yerelde sildiğin dosya bulutta kalır. Değişen dosyanın eski hali kDrive sürüm geçmişinde durur.</div>
+    <div id="sources" style="margin-top:10px"></div>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <div class="grow">
+        <h2>Klasör ekle</h2>
+        <div class="sub">Ev klasöründe gez, yedeklemek istediğin klasörün yanındaki düğmeye bas.</div>
+      </div>
+      <label class="check"><input type="checkbox" id="hidden"> Gizli klasörleri göster</label>
+    </div>
+    <div class="tree" id="tree"></div>
+  </section>
+</main>
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let state = null, showHidden = false;
+const open = new Set(), children = new Map();
+
+function el(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === 'class') e.className = v; else if (k === 'text') e.textContent = v; else e[k] = v;
+  }
+  for (const k of kids) if (k) e.append(k);
+  return e;
+}
+function bytes(n) {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(1)) + ' ' + u[i];
+}
+function ago(ts) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+  if (s < 60) return 'az önce';
+  if (s < 3600) return Math.floor(s / 60) + ' dk önce';
+  if (s < 86400) return Math.floor(s / 3600) + ' saat önce';
+  return Math.floor(s / 86400) + ' gün önce';
+}
+function toast(msg) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block';
+  clearTimeout(toast.h); toast.h = setTimeout(() => t.style.display = 'none', 4000);
+}
+async function api(path, body) {
+  const opt = body === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Kdlite': '1' }, body: JSON.stringify(body)
+  };
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || 'İstek başarısız');
+  return j;
+}
+const short = p => state && p.startsWith(state.home) ? '~' + p.slice(state.home.length) : p;
+
+function renderStatus() {
+  const p = state.progress, bar = $('bar');
+  $('target').textContent = state.backup_root;
+  $('auto').checked = state.auto;
+  $('run').disabled = state.running || state.sources.length === 0;
+  if (state.running) {
+    const pct = p.total_bytes ? Math.round(100 * p.done_bytes / p.total_bytes) : 0;
+    $('status-title').textContent = p.total_files
+      ? `Yedekleniyor: ${p.source} · ${p.done_files}/${p.total_files} dosya`
+      : `Taranıyor: ${p.source || '…'}`;
+    $('status-detail').textContent = p.total_files ? `${bytes(p.done_bytes)} / ${bytes(p.total_bytes)} · ${p.current}` : '';
+    bar.hidden = !p.total_files; bar.firstElementChild.style.width = pct + '%';
+  } else {
+    bar.hidden = true;
+    if (state.sources.length === 0) {
+      $('status-title').textContent = 'Henüz klasör seçilmedi';
+      $('status-detail').textContent = 'Aşağıdan yedeklemek istediğin klasörleri ekle.';
+    } else {
+      const failed = state.sources.some(s => s.last && (s.last.error || (s.last.stats && s.last.stats.failed > 0)));
+      const never = state.sources.some(s => !s.last);
+      $('status-title').textContent = failed ? 'Bazı dosyalar yedeklenemedi' : never ? 'Yedekleme bekliyor' : 'Her şey yedekli';
+      $('status-detail').textContent = state.auto
+        ? `Otomatik yedekleme açık, ${Math.round(state.interval / 60) || 1} dakikada bir kontrol ediliyor.`
+        : 'Otomatik yedekleme kapalı.';
+    }
+  }
+}
+
+function renderSources() {
+  const box = $('sources'); box.replaceChildren();
+  if (state.sources.length === 0) { box.append(el('div', { class: 'empty', text: 'Liste boş.' })); return; }
+  for (const s of state.sources) {
+    const st = s.last && s.last.stats;
+    let badge;
+    if (!s.exists) badge = el('span', { class: 'badge bad', text: 'Klasör bulunamadı' });
+    else if (s.last && s.last.error) badge = el('span', { class: 'badge bad', text: 'Hata' });
+    else if (st && st.failed > 0) badge = el('span', { class: 'badge warn', text: st.failed + ' dosya başarısız' });
+    else if (st) badge = el('span', { class: 'badge', text: 'Yedekli' });
+    else badge = el('span', { class: 'badge dim', text: 'Bekliyor' });
+    const rm = el('button', { class: 'small danger', text: 'Listeden çıkar' });
+    rm.onclick = async () => {
+      if (!confirm(`"${s.name}" artık yedeklenmeyecek. Buluttaki kopya silinmez. Devam edilsin mi?`)) return;
+      try { await api('/api/remove', { name: s.name }); await refresh(); } catch (e) { toast(e.message); }
+    };
+    const stats = el('div', { class: 'stats' },
+      el('span', { text: `${s.files} dosya · ${bytes(s.bytes)} bulutta` }),
+      s.last ? el('span', { text: 'Son kontrol: ' + ago(s.last.at) }) : null,
+      st && st.uploaded ? el('span', { text: `Son seferde ${st.uploaded} dosya yüklendi` }) : null);
+    const item = el('div', { class: 'src' },
+      el('div', { class: 'row' },
+        el('div', { class: 'grow' },
+          el('div', { class: 'row' }, el('span', { class: 'name', text: s.name }), badge),
+          el('div', { class: 'sub mono clip', text: `${short(s.local)}  →  ${state.backup_root}/${s.name}`, title: s.local }),
+          stats),
+        rm));
+    const errs = (s.last && s.last.error) ? [s.last.error] : (st && st.errors) || [];
+    if (errs.length) {
+      const ul = el('ul', { class: 'errors' });
+      for (const e of errs.slice(0, 5)) ul.append(el('li', { text: e }));
+      item.append(ul);
+    }
+    box.append(item);
+  }
+}
+
+function coverage(path) {
+  for (const s of state.sources) {
+    if (path === s.local) return { kind: 'self', name: s.name };
+    if (path.startsWith(s.local + '/')) return { kind: 'inside', name: s.name };
+  }
+  return null;
+}
+
+async function load(path) {
+  if (!children.has(path)) {
+    const r = await api('/api/ls?path=' + encodeURIComponent(path));
+    children.set(path, r.dirs);
+  }
+  return children.get(path);
+}
+
+function renderTree() {
+  const tree = $('tree'); tree.replaceChildren();
+  const walk = (path, depth) => {
+    const kids = children.get(path) || [];
+    for (const d of kids) {
+      if (d.hidden && !showHidden) continue;
+      const cov = coverage(d.path), isOpen = open.has(d.path);
+      const twist = el('button', { class: 'twist', text: isOpen ? '▾' : '▸', title: isOpen ? 'Kapat' : 'Aç' });
+      twist.setAttribute('aria-label', (isOpen ? 'Kapat: ' : 'Aç: ') + d.name);
+      twist.onclick = async () => {
+        if (isOpen) open.delete(d.path);
+        else { try { await load(d.path); open.add(d.path); } catch (e) { toast(e.message); } }
+        renderTree();
+      };
+      const row = el('div', { class: 'node' + (d.skipped ? ' dim' : '') }, twist, el('span', { class: 'label clip', text: d.name, title: d.path }));
+      row.style.paddingLeft = (10 + depth * 20) + 'px';
+      if (d.skipped) row.append(el('span', { class: 'badge dim', text: 'Atlanır' }));
+      else if (cov && cov.kind === 'self') row.append(el('span', { class: 'badge', text: 'Yedekleniyor' }));
+      else if (cov) row.append(el('span', { class: 'badge dim', text: `"${cov.name}" içinde` }));
+      else {
+        const add = el('button', { class: 'small', text: 'Yedekle' });
+        add.onclick = async () => {
+          try { const r = await api('/api/add', { path: d.path }); toast(`"${r.name}" eklendi`); await refresh(); }
+          catch (e) { toast(e.message); }
+        };
+        row.append(add);
+      }
+      tree.append(row);
+      if (isOpen) walk(d.path, depth + 1);
+    }
+    if (kids.length === 0 && depth > 0) {
+      const none = el('div', { class: 'node dim' }, el('span', { class: 'label', text: 'Alt klasör yok' }));
+      none.style.paddingLeft = (32 + depth * 20) + 'px'; tree.append(none);
+    }
+  };
+  walk(state.home, 0);
+}
+
+async function refresh() {
+  try {
+    state = await api('/api/state');
+    if (!children.has(state.home)) await load(state.home);
+    renderStatus(); renderSources(); renderTree();
+  } catch (e) {
+    $('status-title').textContent = 'kdlite ile bağlantı kurulamadı';
+    $('status-detail').textContent = 'Arayüz süreci çalışmıyor olabilir.';
+  }
+}
+async function tick() {
+  try { state = await api('/api/state'); renderStatus(); renderSources(); } catch (e) {}
+  setTimeout(tick, state && state.running ? 1000 : 4000);
+}
+
+$('run').onclick = async () => { try { await api('/api/run', {}); await refresh(); } catch (e) { toast(e.message); } };
+$('auto').onchange = async e => { try { await api('/api/auto', { on: e.target.checked }); } catch (err) { toast(err.message); } };
+$('hidden').onchange = e => { showHidden = e.target.checked; renderTree(); };
+refresh().then(() => setTimeout(tick, 1500));
+</script>
+</body>
+</html>
