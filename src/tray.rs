@@ -150,6 +150,17 @@ fn describe(st: &Value, mounted: bool) -> (&'static str, String) {
             format!("{}{}", tr!("Some files could not be backed up: {}", failed.join(", ")), mount_note),
         );
     }
+    let waiting: Vec<&str> = srcs
+        .iter()
+        .filter(|s| s["last"].get("stats").map(|x| n(x, "pending_deletes")).unwrap_or(0) > 0)
+        .filter_map(|s| s["name"].as_str())
+        .collect();
+    if !waiting.is_empty() {
+        return (
+            BADGE_WARN,
+            format!("{}{}", tr!("Deleted files are waiting for your answer: {}", waiting.join(", ")), mount_note),
+        );
+    }
     let text = if srcs.is_empty() {
         tr!("No folders selected yet")
     } else {
@@ -341,6 +352,7 @@ pub fn run(c: Ctx, ui: Arc<Ui>, port: u16, hidden: bool) -> Result<()> {
             loop {
                 window_open(&window); // kapanan pencere surecini topla
                 ui.poll_ignore();
+                ui.prompt_deletes();
                 let now = describe(&ui.state(), is_mounted(&mp));
                 if last.as_ref() != Some(&now) {
                     let (badge, tip) = now.clone();

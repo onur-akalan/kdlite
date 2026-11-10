@@ -62,6 +62,8 @@ pub struct Ui {
     pub sync_deletes: bool,
     /// Toplu silme icin onay verilen yedekler (bir sonraki calismada uygulanir).
     confirmed: Mutex<BTreeSet<String>>,
+    /// Silme onayi icin bildirimi gosterilen yedekler (ad -> dosya sayisi).
+    asked: Mutex<BTreeMap<String, u64>>,
 }
 
 fn autostart_path() -> PathBuf {
@@ -199,6 +201,7 @@ impl Ui {
             show_after: AtomicBool::new(false),
             sync_deletes: true,
             confirmed: Mutex::new(BTreeSet::new()),
+            asked: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -439,6 +442,50 @@ impl Ui {
         let out = json!({ "at": now(), "mode": mode_name, "done": done, "bytes": bytes, "kept": kept, "errors": errors });
         *self.notice.lock().unwrap() = out.clone();
         Ok(out)
+    }
+
+    /// Onay bekleyen toplu silme varsa bir kez masaustu bildirimiyle sorar.
+    /// Bildirim kapatilirsa soru pencerede ve tepsi simgesinde durur.
+    pub fn prompt_deletes(self: &Arc<Self>) {
+        if self.running.load(Ordering::SeqCst) {
+            return;
+        }
+        let pending: Vec<(String, u64)> = self
+            .last
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(k, v)| Some((k.clone(), v.stats.as_ref()?.pending_deletes)))
+            .collect();
+        let mut asked = self.asked.lock().unwrap();
+        for (name, count) in pending {
+            if count == 0 {
+                asked.remove(&name);
+                continue;
+            }
+            if asked.insert(name.clone(), count) == Some(count) {
+                continue;
+            }
+            let me = self.clone();
+            std::thread::spawn(move || {
+                let out = std::process::Command::new("notify-send")
+                    .args(["-a", "kdlite", "-i", "dialog-warning", "-u", "critical", "--wait"])
+                    .args(["-A", &format!("yes={}", tr!("Delete from cloud too"))])
+                    .args(["-A", &format!("no={}", tr!("Keep in cloud"))])
+                    .arg(tr!("{}: {} files were deleted on this computer", name, count))
+                    .arg(tr!("Delete them from the cloud too? They go to the cloud trash and can be restored."))
+                    .output();
+                let answer = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+                let res = match answer.as_str() {
+                    "yes" => me.resolve_deletes(&name, true),
+                    "no" => me.resolve_deletes(&name, false),
+                    _ => Ok(()),
+                };
+                if let Err(e) = res {
+                    log::warn!("silme onayi uygulanamadi ({}): {:#}", name, e);
+                }
+            });
+        }
     }
 
     /// Toplu silme onayi: `apply` ise yerelde silinenler buluttan da (cop
