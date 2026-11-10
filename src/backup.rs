@@ -272,6 +272,8 @@ struct Item {
 
 /// Yerelde silinen dosya sayisi bunu asarsa buluttan silmeden once onay istenir.
 const DELETE_LIMIT: usize = 20;
+/// Klasorun tum icerigi silinmisse onay istenen en kucuk dosya sayisi.
+const EMPTIED_MIN: usize = 5;
 
 /// Calisan bir yedeklemenin anlik durumu; arayuz buradan okur.
 #[derive(Default)]
@@ -549,7 +551,9 @@ impl Backup<'_> {
         rs.local_only.retain(|rel| !gone(rel));
         if self.sync_deletes && unreadable == 0 && !self.cancelled() {
             let missing: Vec<String> = rs.files.keys().filter(|rel| gone(rel)).cloned().collect();
-            let everything = !missing.is_empty() && missing.len() == rs.files.len();
+            // Klasorun tamami bosalmissa (baglanmamis disk olabilir) onay iste;
+            // birkac dosyalik kucuk klasorlerde bu kural uygulanmaz.
+            let everything = missing.len() >= EMPTIED_MIN && missing.len() == rs.files.len();
             if !rs.deletes_synced {
                 // Bu ozellikten once silinmis olanlar: bulutta kalsin, takibi birak.
                 for rel in &missing {
