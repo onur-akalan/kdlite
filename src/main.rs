@@ -300,6 +300,7 @@ fn make_backup(c: &Ctx) -> backup::Backup<'_> {
         mountpoint: c.cfg.mountpoint(),
         sync_deletes: c.cfg.sync_deletes,
         confirm_deletes: false,
+        pull_cloud: true,
     }
 }
 

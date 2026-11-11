@@ -362,6 +362,7 @@ impl Ui {
             }
             let mut b = self.backup();
             b.confirm_deletes = self.confirmed.lock().unwrap().remove(&src.name);
+            b.pull_cloud = only.is_none(); // tam taramalarda
             *self.progress.source.lock().unwrap() = src.name.clone();
             let res = b.run(&src);
             if res.as_ref().is_ok_and(|s| s.postponed > 0) {
@@ -402,6 +403,7 @@ impl Ui {
             mountpoint: self.mountpoint.clone(),
             sync_deletes: self.sync_deletes,
             confirm_deletes: false,
+            pull_cloud: false,
         }
     }
 

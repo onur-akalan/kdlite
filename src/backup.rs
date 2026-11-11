@@ -226,6 +226,9 @@ pub struct Stats {
     /// Yerelde silinmis ama onay bekledigi icin bulutta birakilan dosya sayisi.
     #[serde(default)]
     pub pending_deletes: u64,
+    /// Yalnizca bulutta oldugu icin yerelde kisayolu olusturulan dosya sayisi.
+    #[serde(default)]
+    pub pulled: u64,
     /// Ilk birkac hata mesaji (arayuzde gostermek icin).
     #[serde(default)]
     pub errors: Vec<String>,
@@ -328,6 +331,9 @@ pub struct Backup<'a> {
     pub sync_deletes: bool,
     /// Cok sayida silme icin kullanici onay verdi.
     pub confirm_deletes: bool,
+    /// Bulutta olup yerelde olmayan dosyalar icin kisayol olusturulsun mu
+    /// (tam taramalarda).
+    pub pull_cloud: bool,
 }
 
 impl Backup<'_> {
@@ -590,9 +596,62 @@ impl Backup<'_> {
             }
         }
 
+        // 5. Bulutta olup yerelde hic bulunmayan dosyalar "yalnizca bulutta"
+        //    sayilir: yerlerine bulut klasorune bakan kisayol konur.
+        if self.pull_cloud && self.sync_deletes && rs.deletes_synced && stats.pending_deletes == 0 && unreadable == 0 && !self.cancelled() {
+            let cloud_root = self.mountpoint.join(self.base_of(source)).join(&source.name);
+            if cloud_root.is_dir() {
+                match self.ensure_dir(&mut rs, source, "") {
+                    Ok(id) => self.pull_dir(id, "", &local, &cloud_root, &mut rs, &mut stats),
+                    Err(e) => log::warn!("{}: bulut klasoru okunamadi: {:#}", source.name, e),
+                }
+                if stats.pulled > 0 {
+                    log::info!("{}: yalnizca bulutta olan {} dosya icin kisayol olusturuldu", source.name, stats.pulled);
+                }
+            }
+        }
+
         state.roots.insert(source.name.clone(), rs);
         save_state(&state)?;
         Ok(stats)
+    }
+
+    /// Buluttaki bir klasoru gezer; yerelde karsiligi olmayan ve takip
+    /// edilmeyen dosyalar icin kisayol olusturur.
+    fn pull_dir(&self, dir_id: u64, rel: &str, local: &Path, cloud_root: &Path, rs: &mut RootState, stats: &mut Stats) {
+        if self.cancelled() {
+            return;
+        }
+        let Ok(list) = self.api.list_dir(dir_id) else { return };
+        for e in list {
+            if excluded(&self.exclude, &e.name) {
+                continue;
+            }
+            let child = join_rel(rel, &e.name);
+            if e.is_dir {
+                self.pull_dir(e.id, &child, local, cloud_root, rs, stats);
+                continue;
+            }
+            if rs.files.contains_key(&child) || rs.local_only.contains(&child) {
+                continue; // zaten takipte (yerelde duruyor ya da silinmesi bekleniyor)
+            }
+            let path = local.join(&child);
+            let absent = matches!(path.symlink_metadata(), Err(err) if err.kind() == std::io::ErrorKind::NotFound);
+            let target = cloud_root.join(&child);
+            if !absent || target.symlink_metadata().is_err() {
+                continue; // yerelde bir sey var ya da bulut klasorunde henuz gorunmuyor
+            }
+            if let Some(parent) = path.parent() {
+                if std::fs::create_dir_all(parent).is_err() {
+                    continue;
+                }
+            }
+            if std::os::unix::fs::symlink(&target, &path).is_ok() {
+                rs.files.insert(child.clone(), FileRec { size: e.size, mtime: e.mtime, id: e.id });
+                rs.cloud_only.insert(child);
+                stats.pulled += 1;
+            }
+        }
     }
 
     /// Yerelde silinmis gorunen dosyalarin takibini birakir (bulutta kalirlar).
