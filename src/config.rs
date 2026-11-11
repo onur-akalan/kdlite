@@ -36,7 +36,7 @@ pub struct Config {
     #[serde(default = "default_rescan")]
     pub rescan_secs: u64,
     /// Baglanan klasore yazilabilsin mi (yeni dosya, duzenleme, klasor
-    /// olusturma). Buluttan silme ve tasima her durumda kapalidir.
+    /// olusturma, tasima, silme). Silinenler kDrive cop kutusuna gider.
     #[serde(default = "default_true")]
     pub writable: bool,
     /// Yedeklenen klasorde silinen dosya buluttan da (kDrive cop kutusuna)
@@ -60,7 +60,7 @@ fn default_true() -> bool {
 }
 
 fn default_rescan() -> u64 {
-    3600
+    600
 }
 
 fn default_backup_interval() -> u64 {
@@ -138,9 +138,10 @@ dir_ttl_secs = 60
 
 # Yedekleme: buluttaki hedef (root_id klasorune gore). Bos ise "Backups/<bilgisayar adi>".
 # backup_root = "Yedekler/bilgisayarim"
-# Degisiklikler aninda yuklenir (inotify). rescan_secs: guvenlik icin tam tarama
-# araligi. backup_interval_secs: yalnizca izleme kurulamazsa kullanilan tarama araligi.
-rescan_secs = 3600
+# Yerel degisiklikler aninda yuklenir (inotify). rescan_secs: buluttaki
+# degisikliklere bakma (ve tam tarama) araligi. backup_interval_secs:
+# yalnizca izleme kurulamazsa kullanilan tarama araligi.
+rescan_secs = 600
 backup_interval_secs = 120
 # Yedeklemede atlanacaklar. Tanimlanmazsa makul bir varsayilan liste kullanilir
 # (.git, node_modules, .venv, __pycache__, gecici dosyalar...).

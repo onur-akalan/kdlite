@@ -40,8 +40,8 @@ Type=Application
 Name=kdlite
 GenericName=Cloud drive client
 GenericName[tr]=Bulut sürücü istemcisi
-Comment=Mounts your cloud drive and backs up selected folders
-Comment[tr]=Bulut sürücünü bağlar ve seçilen klasörleri yedekler
+Comment=Mounts your cloud drive and keeps selected folders in sync
+Comment[tr]=Bulut sürücünü bağlar ve seçilen klasörleri eşitler
 Exec=$bin/kdlite tray
 Icon=folder-cloud
 Categories=Utility;Network;
@@ -58,20 +58,20 @@ X-KDE-Submenu=kdlite
 Icon=folder-cloud
 
 [Desktop Action add]
-Name=Back up this folder
-Name[tr]=Bu klasörü yedekle
+Name=Sync this folder
+Name[tr]=Bu klasörü eşitle
 Icon=cloud-upload
 Exec=$bin/kdlite menu add %f
 
 [Desktop Action sync]
-Name=Back up now
-Name[tr]=Şimdi yedekle
+Name=Sync now
+Name[tr]=Şimdi eşitle
 Icon=view-refresh
 Exec=$bin/kdlite menu sync %f
 
 [Desktop Action remove]
-Name=Stop backing up
-Name[tr]=Yedeklemeden çıkar
+Name=Stop syncing
+Name[tr]=Eşitlemeden çıkar
 Icon=list-remove
 Exec=$bin/kdlite menu remove %f
 

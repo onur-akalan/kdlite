@@ -131,7 +131,7 @@ fn describe(st: &Value, mounted: bool) -> (&'static str, String) {
             tr!("Changing where files are kept")
         } else if n(p, "total_files") > 0 {
             tr!(
-                "Backing up: {}\n{}/{} files, {} / {}",
+                "Syncing: {}\n{}/{} files, {} / {}",
                 source,
                 n(p, "done_files"),
                 n(p, "total_files"),
@@ -146,7 +146,7 @@ fn describe(st: &Value, mounted: bool) -> (&'static str, String) {
     if st.get("paused").and_then(|r| r.as_bool()).unwrap_or(false) {
         return (
             BADGE_PAUSE,
-            format!("{}{}", tr!("Backup paused"), mount_note),
+            format!("{}{}", tr!("Sync paused"), mount_note),
         );
     }
     let failed: Vec<&str> = srcs
@@ -162,12 +162,12 @@ fn describe(st: &Value, mounted: bool) -> (&'static str, String) {
     if !failed.is_empty() {
         return (
             BADGE_WARN,
-            format!("{}{}", tr!("Some files could not be backed up: {}", failed.join(", ")), mount_note),
+            format!("{}{}", tr!("Some files could not be synced: {}", failed.join(", ")), mount_note),
         );
     }
     let waiting: Vec<&str> = srcs
         .iter()
-        .filter(|s| s["last"].get("stats").map(|x| n(x, "pending_deletes")).unwrap_or(0) > 0)
+        .filter(|s| s["last"].get("stats").map(|x| n(x, "pending_deletes") + n(x, "pending_cloud_deletes")).unwrap_or(0) > 0)
         .filter_map(|s| s["name"].as_str())
         .collect();
     if !waiting.is_empty() {
@@ -181,7 +181,7 @@ fn describe(st: &Value, mounted: bool) -> (&'static str, String) {
     } else {
         let files: u64 = srcs.iter().map(|s| n(s, "files")).sum();
         let bytes: u64 = srcs.iter().map(|s| n(s, "bytes")).sum();
-        tr!("{} folders backed up\n{} files, {} in the cloud", srcs.len(), files, human(bytes))
+        tr!("{} folders in sync\n{} files, {} in the cloud", srcs.len(), files, human(bytes))
     };
     let badge = match (mounted, srcs.is_empty()) {
         (false, _) => BADGE_OFFLINE,
@@ -235,21 +235,21 @@ impl ksni::Tray for KdTray {
         let paused = self.ui.paused();
         vec![
             StandardItem {
-                label: tr!("Backup window"),
+                label: tr!("Sync window"),
                 icon_name: "folder-cloud".into(),
                 activate: Box::new(|t: &mut Self| show_window(&t.window, t.port)),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: tr!("Back up now"),
+                label: tr!("Sync now"),
                 icon_name: "cloud-upload".into(),
                 activate: Box::new(|t: &mut Self| t.ui.run_in_background()),
                 ..Default::default()
             }
             .into(),
             StandardItem {
-                label: if paused { tr!("Resume backup") } else { tr!("Pause backup") },
+                label: if paused { tr!("Resume sync") } else { tr!("Pause sync") },
                 icon_name: if paused { "media-playback-start" } else { "media-playback-pause" }.into(),
                 activate: Box::new(|t: &mut Self| t.ui.set_paused(!t.ui.paused())),
                 ..Default::default()

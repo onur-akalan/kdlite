@@ -2,9 +2,9 @@
 
 Linux ve KDE Plasma için hafif bir bulut sürücü istemcisi.
 
-kdlite bulut sürücünü normal bir klasör gibi gösterir, dosyaları yalnızca
-açtığında indirir ve seçtiğin yerel klasörleri yedekler. Sistem tepsisinde
-sessizce çalışır.
+kdlite seçtiğin klasörleri bulut sürücünle eşit tutar, bilgisayarında neyin
+yer kaplayacağına dosya dosya senin karar vermeni sağlar ve sürücünün
+tamamını normal bir klasör gibi gösterir. Sistem tepsisinde sessizce çalışır.
 
 **Şu an desteklenen:** [Infomaniak kDrive](https://www.infomaniak.com/en/ksuite/kdrive).
 Başka sağlayıcılar planlanıyor.
@@ -13,16 +13,20 @@ Başka sağlayıcılar planlanıyor.
 
 ## Ne yapar
 
-- **Sürücün bir klasör olarak.** `~/kDrive-bulut` içinde dosyalara göz at,
-  aç, kaydet ve düzenle (yerini *Ayarlar*'dan değiştirebilirsin). Dosyalar
-  ilk kullanımda iner.
-- **Otomatik yedekleme.** Yedeklenecek klasörleri ve buluttaki yerlerini seç.
-  Değişiklikler birkaç saniye içinde yüklenir.
+- **Seçtiğin klasörlerde çift yönlü eşitleme.** Bilgisayarından bir klasör
+  ekle ya da buluttaki bir klasörü bilgisayarına getir. Bilgisayardaki
+  değişiklikler birkaç saniyede yüklenir; bulutta yapılan değişiklikler
+  (telefon, web, başka bilgisayar) birkaç dakika içinde gelir.
 - **Her dosyanın nerede duracağına sen karar verirsin.** Yalnızca bulutta,
   bulutta ve bilgisayarda ya da yalnızca bilgisayarda. Seçmek için dosyaya
-  sağ tıkla.
-- **Hiçbir şey yanlışlıkla kaybolmaz.** Silinen dosyalar bulutun çöp kutusuna
-  gider, kalıcı silinmez. Toplu silmelerde önce onay istenir.
+  ya da klasöre sağ tıkla.
+- **Sürücünün tamamı bir klasör olarak.** `~/kDrive-bulut` içinde her şeye
+  göz at, aç, kaydet, taşı ve adını değiştir (yerini *Ayarlar*'dan
+  değiştirebilirsin); eşitlemediğin klasörler de orada. Dosyalar ilk
+  kullanımda iner.
+- **Hiçbir şey yanlışlıkla kaybolmaz.** Silinen dosyalar, kaldırıldıkları
+  tarafın çöp kutusuna gider, kalıcı silinmez. Toplu silmelerde önce onay
+  istenir. Bir dosya iki tarafta da değiştiyse iki hali de saklanır.
 - **KDE'ye uyumlu.** Durumu gösteren tepsi simgesi, yerel ayar penceresi,
   Dolphin sağ tık menüsü ve dosyalarda durum rozetleri.
 - **Küçük.** Boştayken yaklaşık 10 MB bellek kullanan tek bir Rust süreci.
@@ -95,10 +99,11 @@ senin okuyabildiğin bir dosyada saklanır.
 ## Günlük kullanım
 
 - **Tepsi simgesi:** tıklayınca pencere açılır. Menüde duraklat, sürdür ve
-  *Şimdi yedekle* bulunur.
-- **Pencere:** klasör ekle, durumlarını gör, *Ayarlar*'ı aç. *Bulut klasörü*
-  bölümü sürücünü açar ve bilgisayarda da duracak bulut klasörlerini
-  seçtirir; bunlar internet yokken de açılır.
+  *Şimdi eşitle* bulunur.
+- **Pencere:** klasör ekle, durumlarını gör, *Ayarlar*'ı aç. *Klasör ekle…*
+  bilgisayarındaki bir klasörü eşitler; *Buluttan ekle…* buluttaki bir
+  klasörü bilgisayarına getirir, içindekiler başta yalnızca bulutta duran
+  kısayollar olur.
 - **Dolphin:** bir dosyaya ya da klasöre sağ tıkla ve **kdlite** menüsünü aç.
 
 ### Dosya nerede durur
@@ -107,7 +112,25 @@ senin okuyabildiğin bir dosyada saklanır.
 |---|---|
 | Yalnızca bulutta tut | Dosya bilgisayardan kalkar; yerinde buluttaki kopyayı açan bir kısayol kalır. |
 | Bulutta ve bilgisayarda tut | Dosya iki yerde de durur ve eşit tutulur. |
-| Yalnızca bilgisayarda tut | Buluttaki kopya bulutun çöp kutusuna gider; dosya artık yedeklenmez. |
+| Yalnızca bilgisayarda tut | Buluttaki kopya bulutun çöp kutusuna gider; dosya artık eşitlenmez. |
+
+Aynı üç seçenek eşitlenen her klasörde çalışır; her dosya ve klasör durumunu
+Dolphin'de küçük bir rozetle gösterir.
+
+### Eşitleme nasıl çalışır
+
+| Ne olur | Sonuç |
+|---|---|
+| Bilgisayarda bir dosyayı değiştirir ya da eklersin | Birkaç saniyede yüklenir. |
+| Bilgisayarda bir dosyayı silersin | Buluttaki kopya bulutun çöp kutusuna gider. |
+| Bulutta bir dosya değişir | Yeni hali indirilir. |
+| Buluta bir dosya eklenir | Burada yalnızca bulutta duran bir kısayol olarak görünür. |
+| Bulutta bir dosya taşınır ya da adı değişir | Burada da taşınır ya da adı değişir. |
+| Bulutta bir dosya silinir | Buradaki kopya masaüstü çöp kutusuna gider. |
+| Dosya iki tarafta da değişti | İkisi de saklanır; seninkinin adına “çakışan kopya” eklenir. |
+
+kdlite buluta 10 dakikada bir (*Ayarlar*'dan değiştirilebilir) ve *Şimdi
+eşitle*'ye bastığında bakar.
 
 ## Verilerin nasıl korunur
 
@@ -115,8 +138,8 @@ senin okuyabildiğin bir dosyada saklanır.
   gider ve geri alınabilir.
 - Bir dosya bilgisayardan ancak bulutta birebir aynısı olduğu doğrulandıktan
   sonra kaldırılır.
-- Bir seferde 20'den fazla dosya ya da bir klasörün tüm içeriği kaybolursa,
-  kdlite buluta dokunmadan önce sorar.
+- Bir tarafta bir seferde 20'den fazla dosya ya da bir klasörün tüm içeriği
+  kaybolursa, kdlite diğer taraftan kaldırmadan önce sorar.
 - Düzenlenen dosyaların eski halleri bulutun sürüm geçmişinde kalır.
 
 ## Ayarlar
@@ -124,7 +147,7 @@ senin okuyabildiğin bir dosyada saklanır.
 Her şey pencerede *Ayarlar* altında. Aynı değerler
 `~/.config/kdlite/config.toml` dosyasında durur.
 
-Yedeklemede atlanacak dosya ve klasörlerin adlarını
+Eşitlemede atlanacak dosya ve klasörlerin adlarını
 `~/.config/kdlite/ignore` dosyasına, `.gitignore` gibi satır satır yaz:
 
 ```
@@ -135,17 +158,16 @@ node_modules
 ## Komut satırı
 
 ```bash
-kdlite backup add ~/Documents   # bir klasörü yedekle
-kdlite backup run               # değişiklikleri şimdi yükle
-kdlite pause                    # yedeklemeyi duraklat
+kdlite backup add ~/Documents   # bir klasörü eşitle
+kdlite backup run               # şimdi eşitle
+kdlite pause                    # eşitlemeyi duraklat
 kdlite --help                   # diğer her şey
 ```
 
 ## Henüz desteklenmeyenler
 
-- Bulut klasörünün içinde taşıma ve yeniden adlandırma
-- Çift yönlü eşitleme
 - kDrive dışındaki sağlayıcılar
+- Buluttaki değişikliğin anında fark edilmesi (bir sonraki kontrolde alınır)
 
 ## Katkı
 

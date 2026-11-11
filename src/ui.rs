@@ -62,6 +62,8 @@ pub struct Ui {
     pub sync_deletes: bool,
     /// Toplu silme icin onay verilen yedekler (bir sonraki calismada uygulanir).
     confirmed: Mutex<BTreeSet<String>>,
+    /// Bulutta silinenlerin yerelden kaldirilmasina onay verilen esitlemeler.
+    confirmed_cloud: Mutex<BTreeSet<String>>,
     /// Silme onayi icin bildirimi gosterilen yedekler (ad -> dosya sayisi).
     asked: Mutex<BTreeMap<String, u64>>,
     /// Bagli bulut klasoru (baglaninca tepsi tarafindan verilir).
@@ -233,6 +235,7 @@ impl Ui {
             show_after: AtomicBool::new(false),
             sync_deletes: true,
             confirmed: Mutex::new(BTreeSet::new()),
+            confirmed_cloud: Mutex::new(BTreeSet::new()),
             asked: Mutex::new(BTreeMap::new()),
             mount: Mutex::new(None),
             usage: Mutex::new(None),
@@ -362,7 +365,8 @@ impl Ui {
             }
             let mut b = self.backup();
             b.confirm_deletes = self.confirmed.lock().unwrap().remove(&src.name);
-            b.pull_cloud = only.is_none(); // tam taramalarda
+            b.confirm_cloud_deletes = self.confirmed_cloud.lock().unwrap().remove(&src.name);
+            b.pull_cloud = only.is_none() || b.confirm_cloud_deletes; // tam taramalarda
             *self.progress.source.lock().unwrap() = src.name.clone();
             let res = b.run(&src);
             if res.as_ref().is_ok_and(|s| s.postponed > 0) {
@@ -404,6 +408,7 @@ impl Ui {
             sync_deletes: self.sync_deletes,
             confirm_deletes: false,
             pull_cloud: false,
+            confirm_cloud_deletes: false,
         }
     }
 
@@ -546,7 +551,7 @@ impl Ui {
             match self.locate(p) {
                 Some((src, local)) => groups.entry(src.name.clone()).or_insert_with(|| (src, Vec::new())).1.push(local),
                 None if self.cloud_rel(p).is_some() && Path::new(p).is_absolute() => drive.push(p.clone()),
-                None => bail!("{}", tr!("this file is not inside a backed-up folder")),
+                None => bail!("{}", tr!("this file is not inside a synced folder")),
             }
         }
         if !drive.is_empty() {
@@ -564,7 +569,7 @@ impl Ui {
         let deadline = Instant::now() + Duration::from_secs(60);
         while self.running.swap(true, Ordering::SeqCst) {
             if Instant::now() > deadline {
-                bail!("{}", tr!("a backup is running right now; try again when it finishes"));
+                bail!("{}", tr!("a sync is running right now; try again when it finishes"));
             }
             std::thread::sleep(Duration::from_millis(300));
         }
@@ -608,35 +613,50 @@ impl Ui {
         if self.running.load(Ordering::SeqCst) {
             return;
         }
-        let pending: Vec<(String, u64)> = self
-            .last
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|(k, v)| Some((k.clone(), v.stats.as_ref()?.pending_deletes)))
-            .collect();
+        let mut pending: Vec<(String, bool, u64)> = Vec::new();
+        for (k, v) in self.last.lock().unwrap().iter() {
+            let Some(st) = v.stats.as_ref() else { continue };
+            pending.push((k.clone(), false, st.pending_deletes));
+            pending.push((k.clone(), true, st.pending_cloud_deletes));
+        }
         let mut asked = self.asked.lock().unwrap();
-        for (name, count) in pending {
+        for (name, cloud, count) in pending {
+            let key = format!("{}{}", name, if cloud { "/cloud" } else { "" });
             if count == 0 {
-                asked.remove(&name);
+                asked.remove(&key);
                 continue;
             }
-            if asked.insert(name.clone(), count) == Some(count) {
+            if asked.insert(key, count) == Some(count) {
                 continue;
             }
             let me = self.clone();
             std::thread::spawn(move || {
+                let (yes, no, title, text) = if cloud {
+                    (
+                        tr!("Remove from this computer too"),
+                        tr!("Keep and upload again"),
+                        tr!("{}: {} files were deleted in the cloud", name, count),
+                        tr!("Remove them from this computer too? They go to the trash and can be restored."),
+                    )
+                } else {
+                    (
+                        tr!("Delete from cloud too"),
+                        tr!("Keep in cloud"),
+                        tr!("{}: {} files were deleted on this computer", name, count),
+                        tr!("Delete them from the cloud too? They go to the cloud trash and can be restored."),
+                    )
+                };
                 let out = std::process::Command::new("notify-send")
                     .args(["-a", "kdlite", "-i", "dialog-warning", "-u", "critical", "--wait"])
-                    .args(["-A", &format!("yes={}", tr!("Delete from cloud too"))])
-                    .args(["-A", &format!("no={}", tr!("Keep in cloud"))])
-                    .arg(tr!("{}: {} files were deleted on this computer", name, count))
-                    .arg(tr!("Delete them from the cloud too? They go to the cloud trash and can be restored."))
+                    .args(["-A", &format!("yes={}", yes)])
+                    .args(["-A", &format!("no={}", no)])
+                    .arg(title)
+                    .arg(text)
                     .output();
                 let answer = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
                 let res = match answer.as_str() {
-                    "yes" => me.resolve_deletes(&name, true),
-                    "no" => me.resolve_deletes(&name, false),
+                    "yes" => me.resolve_deletes(&name, true, cloud),
+                    "no" => me.resolve_deletes(&name, false, cloud),
                     _ => Ok(()),
                 };
                 if let Err(e) = res {
@@ -648,22 +668,26 @@ impl Ui {
 
     /// Toplu silme onayi: `apply` ise yerelde silinenler buluttan da (cop
     /// kutusuna) silinir, degilse bulutta birakilip takipten cikarilir.
-    fn resolve_deletes(self: &Arc<Self>, name: &str, apply: bool) -> Result<()> {
+    /// `cloud`: soru bulutta silinenler icin; onaylanirsa yerel kopyalar cop
+    /// kutusuna gider, onaylanmazsa dosyalar buluta yeniden yuklenir.
+    fn resolve_deletes(self: &Arc<Self>, name: &str, apply: bool, cloud: bool) -> Result<()> {
         let src = backup::load_sources()
             .into_iter()
             .find(|s| s.name == name)
-            .ok_or_else(|| anyhow!("{}", tr!("no such backup in the list")))?;
-        if apply {
+            .ok_or_else(|| anyhow!("{}", tr!("no such folder in the list")))?;
+        if apply && cloud {
+            self.confirmed_cloud.lock().unwrap().insert(src.name.clone());
+        } else if apply {
             self.confirmed.lock().unwrap().insert(src.name.clone());
         } else {
             let deadline = Instant::now() + Duration::from_secs(60);
             while self.running.swap(true, Ordering::SeqCst) {
                 if Instant::now() > deadline {
-                    bail!("{}", tr!("a backup is running right now; try again when it finishes"));
+                    bail!("{}", tr!("a sync is running right now; try again when it finishes"));
                 }
                 std::thread::sleep(Duration::from_millis(300));
             }
-            let res = self.backup().forget_missing(&src);
+            let res = if cloud { self.backup().restore_cloud_missing(&src) } else { self.backup().forget_missing(&src) };
             self.running.store(false, Ordering::SeqCst);
             res?;
         }
@@ -811,7 +835,7 @@ impl Ui {
         if let Some(r) = body.get("backup_root").and_then(|v| v.as_str()) {
             let clean = r.split('/').map(str::trim).filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/");
             if clean.is_empty() {
-                bail!("{}", tr!("the default backup place cannot be empty"));
+                bail!("{}", tr!("the default place in the cloud cannot be empty"));
             }
             if clean != self.backup_root {
                 text = crate::setup::set_line(&text, "backup_root", &quote(&clean));
@@ -830,7 +854,7 @@ impl Ui {
                     bail!("{}", tr!("the cloud folder must be a folder inside your home folder"));
                 }
                 if backup::load_sources().iter().any(|s| new.starts_with(&s.local) || Path::new(&s.local).starts_with(&new)) {
-                    bail!("{}", tr!("the cloud folder cannot be inside a backed-up folder"));
+                    bail!("{}", tr!("the cloud folder cannot be inside a synced folder"));
                 }
                 match std::fs::read_dir(&new) {
                     Ok(mut rd) => {
@@ -925,7 +949,7 @@ impl Ui {
             d.split('/').filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
         });
         let mut all = backup::load_sources();
-        let src = all.iter_mut().find(|s| s.name == name).ok_or_else(|| anyhow!("{}", tr!("no such backup in the list")))?;
+        let src = all.iter_mut().find(|s| s.name == name).ok_or_else(|| anyhow!("{}", tr!("no such folder in the list")))?;
         src.dest = dest;
         backup::save_sources(&all)?;
         self.kick();
@@ -946,7 +970,47 @@ impl Ui {
     }
 
     /// `dest`: buluttaki ust klasor (koke gore yol); None ise genel yedek koku.
-    fn add(&self, path: &str, dest: Option<String>) -> Result<Source> {
+    /// Buluttaki bir klasoru bilgisayara getirir: `parent` altinda ayni adla
+    /// bos bir klasor acilir ve o bulut klasoruyle esitlenir. Icindekiler
+    /// basta "yalnizca bulutta" kisayolu olarak gorunur.
+    fn add_cloud(&self, cloud: &str, parent: &str) -> Result<Source> {
+        let parts: Vec<&str> = cloud.split('/').filter(|p| !p.is_empty() && *p != "." && *p != "..").collect();
+        let Some((name, up)) = parts.split_last() else {
+            bail!("{}", tr!("open the cloud folder you want first; the whole drive cannot be added"));
+        };
+        let full = parts.join("/");
+        for s in backup::load_sources() {
+            let sp = format!("{}/{}", s.dest.as_deref().unwrap_or(&self.backup_root), s.name);
+            let sp = sp.trim_matches('/');
+            if sp == full || sp.starts_with(&format!("{}/", full)) || full.starts_with(&format!("{}/", sp)) {
+                bail!("{}", tr!("this cloud folder overlaps with “{}”, which is already synced", s.name));
+            }
+            if s.name == *name {
+                bail!("{}", tr!("a synced folder named “{}” already exists", name));
+            }
+        }
+        let parent = if parent.is_empty() { config::home() } else { PathBuf::from(parent) };
+        let local = parent.join(name);
+        let created = match std::fs::read_dir(&local) {
+            Ok(mut rd) => {
+                if rd.next().is_some() {
+                    bail!("{}", tr!("“{}” already exists on this computer and is not empty; choose another place", local.display()));
+                }
+                false
+            }
+            Err(_) => {
+                std::fs::create_dir_all(&local).context(tr!("could not create the folder"))?;
+                true
+            }
+        };
+        let res = self.add(&local.to_string_lossy(), Some(up.join("/")), Some(name.to_string()));
+        if res.is_err() && created {
+            let _ = std::fs::remove_dir(&local);
+        }
+        res
+    }
+
+    fn add(&self, path: &str, dest: Option<String>, name: Option<String>) -> Result<Source> {
         let dest = dest.map(|d| {
             d.split('/').filter(|p| !p.is_empty() && *p != "." && *p != "..").collect::<Vec<_>>().join("/")
         });
@@ -965,22 +1029,27 @@ impl Ui {
         for s in &all {
             let other = Path::new(&s.local);
             if abs == other {
-                bail!("{}", tr!("this folder is already backed up"));
+                bail!("{}", tr!("this folder is already synced"));
             }
             if abs.starts_with(other) {
-                bail!("{}", tr!("this folder is already inside the “{}” backup", s.name));
+                bail!("{}", tr!("this folder is already inside the synced folder “{}”", s.name));
             }
             if other.starts_with(&abs) {
-                bail!("{}", tr!("“{}” inside it is backed up separately; remove that first", s.name));
+                bail!("{}", tr!("“{}” inside it is synced separately; remove that first", s.name));
             }
         }
         let base = abs
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .ok_or_else(|| anyhow!("klasor adi cikarilamadi"))?;
+        let fixed = name.is_some();
+        let base = name.unwrap_or(base);
         let mut name = base.clone();
         let mut n = 2;
         while all.iter().any(|s| s.name == name) {
+            if fixed {
+                bail!("{}", tr!("a synced folder named “{}” already exists", name));
+            }
             name = format!("{} ({})", base, n);
             n += 1;
         }
@@ -1013,11 +1082,11 @@ impl Ui {
         if all.len() == before {
             if let Some(l) = &local {
                 if let Some(s) = all.iter().find(|s| l.starts_with(&s.local)) {
-                    bail!("{}", tr!("this folder is inside the “{}” backup; it cannot be removed separately", s.name));
+                    bail!("{}", tr!("this folder is inside the synced folder “{}”; it cannot be removed separately", s.name));
                 }
-                bail!("{}", tr!("this folder is not being backed up"));
+                bail!("{}", tr!("this folder is not synced"));
             }
-            bail!("{}", tr!("no such backup in the list"));
+            bail!("{}", tr!("no such folder in the list"));
         }
         backup::save_sources(&all)?;
         self.resync_watcher();
@@ -1074,8 +1143,13 @@ impl Ui {
             (true, "/api/add") => match self.add(
                 &field("path"),
                 body.get("dest").and_then(|v| v.as_str()).map(str::to_string),
+                None,
             ) {
                 Ok(s) => json_ok(json!({ "name": s.name })),
+                Err(e) => json_err(400, format!("{:#}", e)),
+            },
+            (true, "/api/add_cloud") => match self.add_cloud(&field("cloud"), &field("parent")) {
+                Ok(s) => json_ok(json!({ "name": s.name, "local": s.local })),
                 Err(e) => json_err(400, format!("{:#}", e)),
             },
             (true, "/api/remove") => match self.remove(&field("name"), &field("path")) {
@@ -1136,7 +1210,8 @@ impl Ui {
             }
             (true, "/api/deletes") => {
                 let apply = body.get("apply").and_then(|v| v.as_bool()).unwrap_or(false);
-                match self.resolve_deletes(&field("name"), apply) {
+                let cloud = body.get("cloud").and_then(|v| v.as_bool()).unwrap_or(false);
+                match self.resolve_deletes(&field("name"), apply, cloud) {
                     Ok(()) => json_ok(json!({})),
                     Err(e) => json_err(400, format!("{:#}", e)),
                 }
@@ -1150,10 +1225,10 @@ impl Ui {
                 }
                 let abs = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
                 let Some(src) = backup::load_sources().into_iter().find(|s| abs.starts_with(&s.local)) else {
-                    return json_err(400, tr!("this folder is not being backed up"));
+                    return json_err(400, tr!("this folder is not synced"));
                 };
                 if self.running.load(Ordering::SeqCst) {
-                    return json_err(400, tr!("a backup is already running"));
+                    return json_err(400, tr!("a sync is already running"));
                 }
                 let me = self.clone();
                 let only: BTreeSet<String> = [src.name.clone()].into();

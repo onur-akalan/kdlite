@@ -418,8 +418,72 @@ impl Inner {
         Ok(())
     }
 
-    /// Yalnizca henuz yuklenmemis bekleyen dosyalar tasinabilir. Hedefte
-    /// buluttaki bir dosya varsa, bekleyen icerik onun yeni surumu olur.
+    /// Buluttaki bir dosyayi ya da klasoru tasir ve/veya adini degistirir.
+    /// Hedefte ayni adda bir dosya varsa o kDrive cop kutusuna gider.
+    fn rename_cloud(
+        &self,
+        parent: u64,
+        src: u64,
+        new_parent: u64,
+        new_name: &str,
+        target: Option<(u64, Entry)>,
+    ) -> Result<(), c_int> {
+        if self.write.is_none() {
+            return Err(EROFS);
+        }
+        let (id, old_name, new_parent_id) = {
+            let nodes = self.nodes.lock().unwrap();
+            if nodes.staged.get(&src).is_some_and(|s| s.uploading || s.dirty) {
+                return Err(libc::EBUSY); // yuklenmeyi bekleyen degisiklik var
+            }
+            let node = nodes.by_ino.get(&src).ok_or(ENOENT)?;
+            (node.entry.id, node.entry.name.clone(), self.parent_dir_id(&nodes, new_parent)?)
+        };
+        if new_parent == parent && new_name == old_name {
+            return Ok(());
+        }
+        let fail = |what: &str, e: anyhow::Error| {
+            log::warn!("{}: {}: {:#}", what, old_name, e);
+            EIO
+        };
+        if let Some((t, e)) = &target {
+            if e.is_dir || *t >= STAGE_BASE {
+                return Err(libc::EEXIST);
+            }
+            self.api.trash(e.id).map_err(|err| fail("hedefteki dosya cop kutusuna tasinamadi", err))?;
+            let mut nodes = self.nodes.lock().unwrap();
+            nodes.by_ino.remove(t);
+            nodes.drop_child(new_parent, *t);
+        }
+        if new_parent != parent {
+            // Hedef klasorde eski adla bir sey varsa once adi degistir.
+            let clash = new_name != old_name && self.children(new_parent)?.iter().any(|(_, e)| e.name == old_name);
+            if clash {
+                self.api.rename(id, new_name).map_err(|e| fail("adi degistirilemedi", e))?;
+                self.api.move_to(id, new_parent_id).map_err(|e| fail("tasinamadi", e))?;
+            } else {
+                self.api.move_to(id, new_parent_id).map_err(|e| fail("tasinamadi", e))?;
+                if new_name != old_name {
+                    self.api.rename(id, new_name).map_err(|e| fail("adi degistirilemedi", e))?;
+                }
+            }
+        } else {
+            self.api.rename(id, new_name).map_err(|e| fail("adi degistirilemedi", e))?;
+        }
+        log::info!("bulutta tasindi: {} -> {}", old_name, new_name);
+        let mut nodes = self.nodes.lock().unwrap();
+        if let Some(n) = nodes.by_ino.get_mut(&src) {
+            n.entry.name = new_name.to_string();
+            n.parent = new_parent;
+        }
+        nodes.drop_child(parent, src);
+        nodes.add_child(new_parent, src);
+        Ok(())
+    }
+
+    /// Henuz yuklenmemis bekleyen dosyalar yerelde, buluttaki ogeler bulutta
+    /// tasinir. Bekleyen dosyanin hedefinde buluttaki bir dosya varsa,
+    /// bekleyen icerik onun yeni surumu olur.
     fn rename(&self, parent: u64, name: &str, new_parent: u64, new_name: &str) -> Result<(), c_int> {
         let (src, _) = self
             .children(parent)?
@@ -427,8 +491,11 @@ impl Inner {
             .find(|(_, e)| e.name == name)
             .ok_or(ENOENT)?;
         let target = self.children(new_parent)?.into_iter().find(|(_, e)| e.name == new_name);
+        if src < STAGE_BASE {
+            return self.rename_cloud(parent, src, new_parent, new_name, target);
+        }
         let mut nodes = self.nodes.lock().unwrap();
-        let movable = src >= STAGE_BASE && nodes.staged.get(&src).is_some_and(|s| !s.uploading);
+        let movable = nodes.staged.get(&src).is_some_and(|s| !s.uploading);
         if !movable {
             return Err(EPERM);
         }

@@ -1,11 +1,14 @@
-//! Tek yonlu yedekleme: secilen yerel klasorler kDrive'a akar.
+//! Cift yonlu esitleme: secilen yerel klasorler buluttaki karsiliklariyla
+//! ayni tutulur.
 //!
 //! Kurallar:
-//! - Yerel dosyalar yalnizca okunur, asla degistirilmez.
-//! - Bulutta yalnizca yedek klasorunun altina yazilir.
-//! - Hicbir sey silinmez: yerelde silinen dosya bulutta kalir.
-//! - Degisen dosya ayni adla yeniden yuklenir; eskisi kDrive surum
-//!   gecmisinde kalir.
+//! - Bilgisayarda degisen dosya yuklenir; eskisi kDrive surum gecmisinde kalir.
+//! - Bulutta degisen dosya indirilir.
+//! - Hicbir sey kalici silinmez: bilgisayarda silinen dosyanin buluttaki
+//!   kopyasi kDrive cop kutusuna, bulutta silinen dosyanin yerel kopyasi
+//!   masaustu cop kutusuna gider. Toplu silmelerde once onay istenir.
+//! - Iki tarafta da degisen dosyanin iki hali de saklanir.
+//! - Bulutta yeni beliren dosya yerelde "yalnizca bulutta" kisayolu olur.
 
 use crate::api::{Api, Entry};
 use crate::config;
@@ -62,6 +65,9 @@ struct RootState {
     /// once yerelde silinmis dosyalar buluttan silinmez; yalnizca unutulur.
     #[serde(default)]
     deletes_synced: bool,
+    /// Bulutta silinmis olup yerelden kaldirilmasi icin onay bekleyenler.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    cloud_missing: BTreeSet<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -229,6 +235,21 @@ pub struct Stats {
     /// Yalnizca bulutta oldugu icin yerelde kisayolu olusturulan dosya sayisi.
     #[serde(default)]
     pub pulled: u64,
+    /// Bulutta degistigi icin indirilen dosya sayisi.
+    #[serde(default)]
+    pub downloaded: u64,
+    /// Bulutta tasindigi ya da adi degistigi icin yerelde de tasinan dosya sayisi.
+    #[serde(default)]
+    pub moved: u64,
+    /// Bulutta silindigi icin yerelde cop kutusuna tasinan dosya sayisi.
+    #[serde(default)]
+    pub removed: u64,
+    /// Bulutta silinmis ama onay bekledigi icin yerelde birakilan dosya sayisi.
+    #[serde(default)]
+    pub pending_cloud_deletes: u64,
+    /// Iki tarafta da degistigi icin iki hali de saklanan dosya sayisi.
+    #[serde(default)]
+    pub conflicts: u64,
     /// Ilk birkac hata mesaji (arayuzde gostermek icin).
     #[serde(default)]
     pub errors: Vec<String>,
@@ -331,10 +352,68 @@ pub struct Backup<'a> {
     pub sync_deletes: bool,
     /// Cok sayida silme icin kullanici onay verdi.
     pub confirm_deletes: bool,
-    /// Bulutta olup yerelde olmayan dosyalar icin kisayol olusturulsun mu
-    /// (tam taramalarda).
+    /// Buluttaki degisiklikler bilgisayara yansitilsin mi (tam taramalarda).
     pub pull_cloud: bool,
+    /// Bulutta silinen cok sayida dosyanin yerelden kaldirilmasina onay verildi.
+    pub confirm_cloud_deletes: bool,
 }
+
+/// Buluttaki bir esitleme klasorunun o anki icerigi.
+#[derive(Default)]
+struct CloudTree {
+    files: BTreeMap<String, Entry>,
+    dirs: BTreeMap<String, u64>,
+    /// Butun klasorler okunabildi mi; okunamadiysa "bulutta yok" denemez.
+    complete: bool,
+}
+
+/// Yerel dosyayi masaustu cop kutusuna tasir; basardiysa true.
+fn trash_local(path: &Path) -> bool {
+    let _ = std::process::Command::new("gio")
+        .arg("trash")
+        .arg("--")
+        .arg(path)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    path.symlink_metadata().is_err()
+}
+
+/// `rel` dosyasinin ust klasorlerinden, bulutta artik olmayan ve bosalmis
+/// olanlari kaldirir.
+fn prune_empty(local: &Path, rel: &str, cloud_dirs: &BTreeMap<String, u64>) {
+    let mut dir = rel.rsplit_once('/').map(|(d, _)| d.to_string());
+    while let Some(d) = dir {
+        if cloud_dirs.contains_key(&d) || std::fs::remove_dir(local.join(&d)).is_err() {
+            break;
+        }
+        dir = d.rsplit_once('/').map(|(p, _)| p.to_string());
+    }
+}
+
+/// "rapor.pdf" -> "rapor (cakisan kopya bilgisayar 2026-11-11 142530).pdf"
+fn conflict_name(name: &str) -> String {
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    let t = now_secs() as libc::time_t;
+    unsafe { libc::localtime_r(&t, &mut tm) };
+    let tag = format!(
+        "({} {} {:04}-{:02}-{:02} {:02}{:02}{:02})",
+        tr!("conflicting copy"),
+        hostname(),
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    );
+    match name.rfind('.') {
+        Some(i) if i > 0 => format!("{} {}{}", &name[..i], tag, &name[i..]),
+        _ => format!("{} {}", name, tag),
+    }
+}
+
 
 impl Backup<'_> {
     /// Bir yedegin buluttaki ust klasoru (koke gore yol).
@@ -428,6 +507,7 @@ impl Backup<'_> {
             by_dir.entry(f.dir_rel.clone()).or_default().push(f);
         }
         let mut jobs: VecDeque<(u64, LocalFile)> = VecDeque::new();
+        let mut early_errors: Vec<String> = Vec::new();
         for (dir_rel, files) in by_dir {
             if self.cancelled() {
                 break;
@@ -463,6 +543,28 @@ impl Backup<'_> {
                             },
                         );
                         stats.already += 1;
+                    }
+                    // Kayittan beri bulutta da degismis: iki hali de sakla.
+                    Some(r)
+                        if !r.is_dir
+                            && rs
+                                .files
+                                .get(&f.rel)
+                                .is_some_and(|rec| rec.id != r.id || rec.size != r.size || rec.mtime != r.mtime) =>
+                    {
+                        match self.keep_both(&f.abs, r) {
+                            Ok(copy) => {
+                                log::info!("iki tarafta da degismis, yerel hali ayri saklandi: {}/{} -> {}", source.name, f.rel, copy);
+                                rs.files.insert(f.rel.clone(), FileRec { size: r.size, mtime: r.mtime, id: r.id });
+                                rs.cloud_only.remove(&f.rel);
+                                stats.conflicts += 1;
+                            }
+                            Err(e) => {
+                                log::warn!("cakisma cozulemedi: {}/{}: {:#}", source.name, f.rel, e);
+                                stats.failed += 1;
+                                early_errors.push(format!("{}: {:#}", f.rel, e));
+                            }
+                        }
                     }
                     _ => jobs.push_back((dir_id, f)),
                 }
@@ -548,7 +650,9 @@ impl Backup<'_> {
         stats.uploaded = uploaded.into_inner();
         stats.uploaded_bytes = bytes.into_inner();
         stats.failed += failed.into_inner();
-        stats.errors = errors.into_inner().unwrap();
+        stats.errors = early_errors;
+        stats.errors.extend(errors.into_inner().unwrap());
+        stats.errors.truncate(MAX_ERRORS);
 
         // 4. Yerelde silinen dosyalar buluttan da kDrive cop kutusuna tasinir.
         let gone = |rel: &String| {
@@ -596,19 +700,14 @@ impl Backup<'_> {
             }
         }
 
-        // 5. Bulutta olup yerelde hic bulunmayan dosyalar "yalnizca bulutta"
-        //    sayilir: yerlerine bulut klasorune bakan kisayol konur.
+        // 5. Buluttaki degisiklikler bilgisayara yansir.
         if self.pull_cloud && self.sync_deletes && rs.deletes_synced && stats.pending_deletes == 0 && unreadable == 0 && !self.cancelled() {
-            let cloud_root = self.mountpoint.join(self.base_of(source)).join(&source.name);
-            if cloud_root.is_dir() {
-                match self.ensure_dir(&mut rs, source, "") {
-                    Ok(id) => self.pull_dir(id, "", &local, &cloud_root, &mut rs, &mut stats),
-                    Err(e) => log::warn!("{}: bulut klasoru okunamadi: {:#}", source.name, e),
-                }
-                if stats.pulled > 0 {
-                    log::info!("{}: yalnizca bulutta olan {} dosya icin kisayol olusturuldu", source.name, stats.pulled);
-                }
+            if let Err(e) = self.from_cloud(source, &local, &mut rs, &mut stats) {
+                log::warn!("{}: buluttaki degisiklikler alinamadi: {:#}", source.name, e);
             }
+        } else {
+            // Bu calismada bakilmadi: bekleyen soru yerinde dursun.
+            stats.pending_cloud_deletes = rs.cloud_missing.len() as u64;
         }
 
         state.roots.insert(source.name.clone(), rs);
@@ -616,42 +715,332 @@ impl Backup<'_> {
         Ok(stats)
     }
 
-    /// Buluttaki bir klasoru gezer; yerelde karsiligi olmayan ve takip
-    /// edilmeyen dosyalar icin kisayol olusturur.
-    fn pull_dir(&self, dir_id: u64, rel: &str, local: &Path, cloud_root: &Path, rs: &mut RootState, stats: &mut Stats) {
+    /// Esitleme klasorunun buluttaki kimligini yoldan cozer (olusturmadan).
+    fn find_root(&self, source: &Source) -> Result<Option<u64>> {
+        let mut id = self.root_id;
+        let base = self.base_of(source);
+        for part in base.split('/').filter(|p| !p.is_empty()).chain(std::iter::once(source.name.as_str())) {
+            match self.api.list_dir(id)?.into_iter().find(|e| e.is_dir && e.name == part) {
+                Some(e) => id = e.id,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(id))
+    }
+
+    fn cloud_walk(&self, dir_id: u64, rel: &str, out: &mut CloudTree) {
         if self.cancelled() {
+            out.complete = false;
             return;
         }
-        let Ok(list) = self.api.list_dir(dir_id) else { return };
+        let list = match self.api.list_dir(dir_id) {
+            Ok(l) => l,
+            Err(e) => {
+                log::warn!("bulut klasoru listelenemedi: {}: {:#}", rel, e);
+                out.complete = false;
+                return;
+            }
+        };
+        out.dirs.insert(rel.to_string(), dir_id);
         for e in list {
             if excluded(&self.exclude, &e.name) {
                 continue;
             }
             let child = join_rel(rel, &e.name);
             if e.is_dir {
-                self.pull_dir(e.id, &child, local, cloud_root, rs, stats);
+                self.cloud_walk(e.id, &child, out);
+            } else {
+                out.files.insert(child, e);
+            }
+        }
+    }
+
+    fn excluded_rel(&self, rel: &str) -> bool {
+        rel.split('/').any(|part| excluded(&self.exclude, part))
+    }
+
+    /// Buluttaki dosyayi indirip `path` yerine koyar (once gecici dosyaya).
+    fn fetch(&self, e: &Entry, path: &Path) -> Result<()> {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let tmp = path.with_file_name(format!(".{}.kdlite.part", name));
+        let res = (|| -> Result<()> {
+            let mut resp = self.api.download(e.id).context(tr!("could not download from the cloud"))?;
+            let mut f = std::fs::File::create(&tmp)?;
+            let n = std::io::copy(&mut resp, &mut f)?;
+            if n != e.size {
+                bail!("{}", tr!("the downloaded file has the wrong size"));
+            }
+            // Buluttaki zamani koru ki dosya yeniden yuklenmesin.
+            f.set_modified(UNIX_EPOCH + Duration::from_secs(e.mtime.max(0) as u64))?;
+            if let Ok(old) = std::fs::metadata(path) {
+                let _ = f.set_permissions(old.permissions());
+            }
+            drop(f);
+            std::fs::rename(&tmp, path)?;
+            Ok(())
+        })();
+        if res.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+        }
+        res
+    }
+
+    /// Iki tarafta da degismis dosya: yerel hali yeni bir adla saklanir (bir
+    /// sonraki calismada o da yuklenir), buluttaki hali asil ada indirilir.
+    /// Saklanan kopyanin adini doner.
+    fn keep_both(&self, path: &Path, e: &Entry) -> Result<String> {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let copy = conflict_name(&name);
+        let copy_path = path.with_file_name(&copy);
+        if copy_path.symlink_metadata().is_ok() {
+            bail!("{}", tr!("a conflicting copy with the same name already exists"));
+        }
+        std::fs::rename(path, &copy_path)?;
+        if let Err(err) = self.fetch(e, path) {
+            let _ = std::fs::rename(&copy_path, path); // geri al
+            return Err(err);
+        }
+        Ok(copy)
+    }
+
+    /// Buluttaki agaci kayitla karsilastirir ve farklari bilgisayara uygular:
+    /// degisen dosya indirilir, tasinan tasinir, yeni dosya icin kisayol
+    /// konur, silinen dosyanin yerel kopyasi cop kutusuna gider.
+    fn from_cloud(&self, source: &Source, local: &Path, rs: &mut RootState, stats: &mut Stats) -> Result<()> {
+        let Some(root_id) = self.find_root(source)? else {
+            return Ok(()); // bulutta klasor henuz yok
+        };
+        let cloud_root = self.mountpoint.join(self.base_of(source)).join(&source.name);
+        let mut tree = CloudTree { complete: true, ..Default::default() };
+        self.cloud_walk(root_id, "", &mut tree);
+        let dry = std::env::var_os("KDLITE_DRY_SYNC").is_some();
+        // Kisayollar bulut klasorune bakar: bagli degilse olusturma.
+        let mount_ok = cloud_root.is_dir();
+        let note = |stats: &mut Stats, rel: &str, e: anyhow::Error| {
+            log::warn!("{}/{}: {:#}", source.name, rel, e);
+            stats.failed += 1;
+            if stats.errors.len() < MAX_ERRORS {
+                stats.errors.push(format!("{}: {:#}", rel, e));
+            }
+        };
+        let rec_of = |e: &Entry| FileRec { size: e.size, mtime: e.mtime, id: e.id };
+        let by_id: HashMap<u64, String> = rs.files.iter().map(|(k, v)| (v.id, k.clone())).collect();
+
+        for (rel, e) in &tree.files {
+            if self.cancelled() {
+                return Ok(());
+            }
+            if rs.local_only.contains(rel) {
                 continue;
             }
-            if rs.files.contains_key(&child) || rs.local_only.contains(&child) {
-                continue; // zaten takipte (yerelde duruyor ya da silinmesi bekleniyor)
-            }
-            let path = local.join(&child);
-            let absent = matches!(path.symlink_metadata(), Err(err) if err.kind() == std::io::ErrorKind::NotFound);
-            let target = cloud_root.join(&child);
-            if !absent || target.symlink_metadata().is_err() {
-                continue; // yerelde bir sey var ya da bulut klasorunde henuz gorunmuyor
-            }
-            if let Some(parent) = path.parent() {
-                if std::fs::create_dir_all(parent).is_err() {
+            let path = local.join(rel);
+            if !rs.files.contains_key(rel) {
+                // Kayitta yok: bulutta tasinmis ya da yeni.
+                if path.symlink_metadata().is_ok() {
+                    continue; // yerelde ayni adda bir sey var; yukleme adimi ilgilenir
+                }
+                let from = by_id.get(&e.id).filter(|old| !tree.files.contains_key(*old) && rs.files.contains_key(*old)).cloned();
+                if let Some(old) = from {
+                    let old_path = local.join(&old);
+                    let Ok(meta) = old_path.symlink_metadata() else { continue };
+                    let link = meta.file_type().is_symlink() && rs.cloud_only.contains(&old);
+                    if !link && !meta.is_file() {
+                        continue;
+                    }
+                    log::info!("bulutta tasindi: {}/{} -> {}", source.name, old, rel);
+                    if dry {
+                        continue;
+                    }
+                    let done = (|| -> Result<()> {
+                        if let Some(parent) = path.parent() {
+                            std::fs::create_dir_all(parent)?;
+                        }
+                        if link {
+                            std::os::unix::fs::symlink(cloud_root.join(rel), &path)?;
+                            std::fs::remove_file(&old_path)?;
+                        } else {
+                            std::fs::rename(&old_path, &path)?;
+                        }
+                        Ok(())
+                    })();
+                    match done {
+                        Ok(()) => {
+                            if let Some(r) = rs.files.remove(&old) {
+                                rs.files.insert(rel.clone(), r);
+                            }
+                            if rs.cloud_only.remove(&old) {
+                                rs.cloud_only.insert(rel.clone());
+                            }
+                            stats.moved += 1;
+                            prune_empty(local, &old, &tree.dirs);
+                        }
+                        Err(err) => {
+                            note(stats, rel, err);
+                            continue;
+                        }
+                    }
+                    // Tasinirken icerigi de degismis olabilir: asagida bakilir.
+                } else {
+                    if !mount_ok {
+                        continue; // bulut klasoru bagli degil; sonraki taramada
+                    }
+                    let target = cloud_root.join(rel);
+                    log::info!("bulutta yeni: {}/{}", source.name, rel);
+                    if dry {
+                        continue;
+                    }
+                    if let Some(parent) = path.parent() {
+                        if std::fs::create_dir_all(parent).is_err() {
+                            continue;
+                        }
+                    }
+                    if std::os::unix::fs::symlink(&target, &path).is_ok() {
+                        rs.files.insert(rel.clone(), rec_of(e));
+                        rs.cloud_only.insert(rel.clone());
+                        stats.pulled += 1;
+                    }
                     continue;
                 }
             }
-            if std::os::unix::fs::symlink(&target, &path).is_ok() {
-                rs.files.insert(child.clone(), FileRec { size: e.size, mtime: e.mtime, id: e.id });
-                rs.cloud_only.insert(child);
-                stats.pulled += 1;
+            let Some(r) = rs.files.get(rel).cloned() else { continue };
+            if r.id == e.id && r.size == e.size && r.mtime == e.mtime {
+                continue;
+            }
+            // Bulutta degismis.
+            if rs.cloud_only.contains(rel) {
+                rs.files.insert(rel.clone(), rec_of(e));
+                continue;
+            }
+            let Ok(meta) = path.symlink_metadata() else { continue }; // yerelde silinmis: silme adimi ilgilenir
+            if !meta.is_file() {
+                continue;
+            }
+            let (size, mtime) = (meta.len(), mtime_secs(&meta));
+            if size == e.size && mtime == e.mtime {
+                rs.files.insert(rel.clone(), rec_of(e)); // zaten ayni
+            } else if size == r.size && mtime == r.mtime {
+                log::info!("bulutta degisti, indiriliyor: {}/{}", source.name, rel);
+                if dry {
+                    continue;
+                }
+                match self.fetch(e, &path) {
+                    Ok(()) => {
+                        rs.files.insert(rel.clone(), rec_of(e));
+                        stats.downloaded += 1;
+                    }
+                    Err(err) => note(stats, rel, err),
+                }
+            } else {
+                log::info!("iki tarafta da degismis: {}/{}", source.name, rel);
+                if dry {
+                    continue;
+                }
+                match self.keep_both(&path, e) {
+                    Ok(_) => {
+                        rs.files.insert(rel.clone(), rec_of(e));
+                        stats.conflicts += 1;
+                    }
+                    Err(err) => note(stats, rel, err),
+                }
             }
         }
+
+        if !tree.complete {
+            stats.pending_cloud_deletes = rs.cloud_missing.len() as u64;
+            return Ok(());
+        }
+
+        // Kayitta olup bulutta artik bulunmayanlar: bulutta silinmis.
+        let gone: Vec<String> = rs
+            .files
+            .keys()
+            .filter(|rel| !tree.files.contains_key(*rel) && !self.excluded_rel(rel))
+            .cloned()
+            .collect();
+        let mut waiting: Vec<String> = Vec::new(); // yerelde hala duran, kaldirilacak olanlar
+        for rel in &gone {
+            match local.join(rel).symlink_metadata() {
+                Err(_) => {
+                    // Iki tarafta da yok.
+                    rs.files.remove(rel);
+                    rs.cloud_only.remove(rel);
+                }
+                Ok(meta) if meta.is_file() => {
+                    let same = rs.files.get(rel).is_some_and(|r| r.size == meta.len() && r.mtime == mtime_secs(&meta));
+                    if same {
+                        waiting.push(rel.clone());
+                    } else if !dry {
+                        // Yerelde de degismis: duzenleme silmeye baskin gelir, yeniden yuklenir.
+                        rs.files.remove(rel);
+                    }
+                }
+                Ok(meta) if meta.file_type().is_symlink() && rs.cloud_only.contains(rel) => waiting.push(rel.clone()),
+                Ok(_) => {
+                    rs.files.remove(rel);
+                    rs.cloud_only.remove(rel);
+                }
+            }
+        }
+        let everything = waiting.len() >= EMPTIED_MIN && waiting.len() == rs.files.len();
+        if (waiting.len() > DELETE_LIMIT || everything) && !self.confirm_cloud_deletes {
+            log::info!("{}: bulutta silinmis {} dosya icin onay bekleniyor", source.name, waiting.len());
+            stats.pending_cloud_deletes = waiting.len() as u64;
+            rs.cloud_missing = waiting.into_iter().collect();
+        } else {
+            rs.cloud_missing.clear();
+            for rel in waiting {
+                log::info!("bulutta silindi, yerel kopya cop kutusuna tasiniyor: {}/{}", source.name, rel);
+                if dry {
+                    continue;
+                }
+                let path = local.join(&rel);
+                let ok = if rs.cloud_only.contains(&rel) {
+                    std::fs::remove_file(&path).is_ok() // yalnizca kisayol
+                } else {
+                    trash_local(&path)
+                };
+                if !ok {
+                    note(stats, &rel, anyhow!("{}", tr!("could not be moved to the trash")));
+                    continue;
+                }
+                rs.files.remove(&rel);
+                rs.cloud_only.remove(&rel);
+                stats.removed += 1;
+                prune_empty(local, &rel, &tree.dirs);
+            }
+        }
+        if !dry {
+            // Bulutta olan klasorler (bos olsalar da) yerelde de bulunsun.
+            for d in tree.dirs.keys().filter(|d| !d.is_empty()) {
+                let p = local.join(d);
+                if p.symlink_metadata().is_err() {
+                    let _ = std::fs::create_dir_all(&p);
+                }
+            }
+            rs.dirs = tree.dirs;
+        }
+        if stats.pulled + stats.downloaded + stats.moved + stats.removed + stats.conflicts > 0 {
+            log::info!(
+                "{}: buluttan: {} yeni kisayol, {} indirildi, {} tasindi, {} kaldirildi, {} cakisma",
+                source.name, stats.pulled, stats.downloaded, stats.moved, stats.removed, stats.conflicts
+            );
+        }
+        Ok(())
+    }
+
+    /// Bulutta silinmis olup onay bekleyen dosyalar yerelde kalsin: takipten
+    /// cikarilir, bir sonraki calismada buluta yeniden yuklenirler.
+    pub fn restore_cloud_missing(&self, source: &Source) -> Result<u64> {
+        let mut state = load_state()?;
+        let Some(rs) = state.roots.get_mut(&source.name) else { return Ok(0) };
+        let list = std::mem::take(&mut rs.cloud_missing);
+        for rel in &list {
+            if !rs.cloud_only.contains(rel) {
+                rs.files.remove(rel);
+            }
+        }
+        save_state(&state)?;
+        Ok(list.len() as u64)
     }
 
     /// Yerelde silinmis gorunen dosyalarin takibini birakir (bulutta kalirlar).
@@ -710,7 +1099,7 @@ impl Backup<'_> {
         let mut state = load_state()?;
         let mut rs = state.roots.remove(&source.name).unwrap_or_default();
         if rs.base.clone().unwrap_or_else(|| self.backup_root.clone()) != self.base_of(source) {
-            bail!("{}", tr!("the folder is not backed up to its new place yet; try again when the backup finishes"));
+            bail!("{}", tr!("the folder is not synced to its new place yet; try again when the sync finishes"));
         }
         let cloud_root = self.mountpoint.join(self.base_of(source)).join(&source.name);
         let mut items = Vec::new();
@@ -769,7 +1158,7 @@ impl Backup<'_> {
         let (size, mtime) = (meta.len(), mtime_secs(&meta));
         let uploaded = rs.files.get(&item.rel).is_some_and(|r| r.size == size && r.mtime == mtime);
         if !uploaded {
-            bail!("{}", tr!("not backed up yet"));
+            bail!("{}", tr!("not synced yet"));
         }
         let (dir_rel, name) = match item.rel.rsplit_once('/') {
             Some((d, n)) => (d.to_string(), n),
@@ -797,15 +1186,7 @@ impl Backup<'_> {
         if target.symlink_metadata().is_err() {
             bail!("{}", tr!("the kDrive folder is not mounted or the file is not visible there"));
         }
-        let _ = std::process::Command::new("gio")
-            .arg("trash")
-            .arg("--")
-            .arg(&item.abs)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if item.abs.symlink_metadata().is_ok() {
+        if !trash_local(&item.abs) {
             bail!("{}", tr!("could not be moved to the trash"));
         }
         std::os::unix::fs::symlink(&target, &item.abs).context(tr!("could not create the shortcut"))?;

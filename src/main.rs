@@ -19,7 +19,7 @@ use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
 #[derive(Parser)]
-#[command(name = "kdlite", version, about = "Lightweight cloud drive client for Linux: on-demand mount, folder backup, system tray")]
+#[command(name = "kdlite", version, about = "Lightweight cloud drive client for Linux: on-demand mount, two-way folder sync, system tray")]
 struct Cli {
     /// Config file (default: ~/.config/kdlite/config.toml)
     #[arg(long, global = true)]
@@ -100,7 +100,7 @@ enum Cmd {
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
-    /// Back up local folders to the cloud (one-way)
+    /// Keep local folders in sync with the cloud (two-way)
     Backup {
         #[command(subcommand)]
         cmd: BackupCmd,
@@ -109,18 +109,18 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum BackupCmd {
-    /// Add a folder to the backup list
+    /// Add a folder to the sync list
     Add {
         path: PathBuf,
         /// Name in the cloud (default: the folder's name)
         #[arg(long)]
         name: Option<String>,
     },
-    /// Remove a folder from the backup list (the cloud copy is kept)
+    /// Remove a folder from the sync list (the cloud copy is kept)
     Remove { name: String },
-    /// List backed-up folders
+    /// List synced folders
     List,
-    /// Scan once and upload new and changed files
+    /// Sync once: upload local changes, then apply cloud changes
     Run,
     /// Run continuously: scan and upload at intervals
     Watch,
@@ -301,6 +301,7 @@ fn make_backup(c: &Ctx) -> backup::Backup<'_> {
         sync_deletes: c.cfg.sync_deletes,
         confirm_deletes: false,
         pull_cloud: true,
+        confirm_cloud_deletes: false,
     }
 }
 
@@ -496,7 +497,7 @@ fn cmd_place(mode: &str, paths: &[PathBuf], port: u16) -> Result<()> {
     if mode == "local" && many {
         let ok = confirm(
             &tr!("Keep {} on this computer only?", what),
-            &tr!("The cloud copies are moved to the kDrive trash and these files are no longer backed up."),
+            &tr!("The cloud copies are moved to the kDrive trash and these files are no longer synced."),
             &tr!("Delete from cloud"),
         );
         if !ok {
@@ -556,12 +557,12 @@ fn cmd_menu(action: &str, path: &std::path::Path, port: u16) -> Result<()> {
     let label = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.to_string());
     let res = match action {
         "add" => post(port, "/api/add", serde_json::json!({ "path": p }))
-            .map(|_| ("cloud-upload", tr!("Backing up “{}”", label), tr!("Changes will flow to kDrive on their own."))),
+            .map(|_| ("cloud-upload", tr!("Syncing “{}”", label), tr!("Changes will flow to kDrive on their own."))),
         "remove" => post(port, "/api/remove", serde_json::json!({ "path": p }))
-            .map(|_| ("list-remove", tr!("“{}” is no longer backed up", label), tr!("The cloud copy was not deleted."))),
+            .map(|_| ("list-remove", tr!("“{}” is no longer synced", label), tr!("The cloud copy was not deleted."))),
         "sync" => post(port, "/api/run", serde_json::json!({ "path": p })).map(|v| {
             let name = v.get("name").and_then(|n| n.as_str()).unwrap_or(&label).to_string();
-            ("cloud-upload", tr!("Backing up “{}” now", name), tr!("Changed files are being uploaded to kDrive."))
+            ("cloud-upload", tr!("Syncing “{}” now", name), tr!("Changed files are being uploaded to kDrive."))
         }),
         _ => bail!("bilinmeyen islem: {}", action),
     };

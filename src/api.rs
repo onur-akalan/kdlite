@@ -1,5 +1,5 @@
-//! kDrive API istemcisi: listeleme, indirme, klasor olusturma, yukleme ve
-//! cop kutusuna tasima. Kalici silme, tasima ya da yeniden adlandirma istegi
+//! kDrive API istemcisi: listeleme, indirme, klasor olusturma, yukleme,
+//! tasima, yeniden adlandirma ve cop kutusuna tasima. Kalici silme istegi
 //! bilerek yoktur; silinen her sey kDrive cop kutusuna gider (geri alinabilir).
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -121,6 +121,21 @@ impl Api {
     pub fn trash(&self, file_id: u64) -> Result<()> {
         let url = format!("{}/2/drive/{}/files/{}", self.base, self.drive_id, file_id);
         self.send(|| Ok(self.http.delete(&url)))?;
+        Ok(())
+    }
+
+    /// Bir dosyanin ya da klasorun adini degistirir.
+    pub fn rename(&self, file_id: u64, name: &str) -> Result<()> {
+        let url = format!("{}/2/drive/{}/files/{}/rename", self.base, self.drive_id, file_id);
+        let body = serde_json::json!({ "name": name });
+        self.send(|| Ok(self.http.post(&url).json(&body)))?;
+        Ok(())
+    }
+
+    /// Bir dosyayi ya da klasoru baska bir klasore tasir.
+    pub fn move_to(&self, file_id: u64, dir_id: u64) -> Result<()> {
+        let url = format!("{}/3/drive/{}/files/{}/move/{}", self.base, self.drive_id, file_id, dir_id);
+        self.send(|| Ok(self.http.post(&url)))?;
         Ok(())
     }
 

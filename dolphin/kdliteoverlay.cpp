@@ -1,5 +1,6 @@
-// Dolphin icin durum rozetleri: kdlite ile yedeklenen klasorlerdeki dosyalarin
-// simgesine kucuk bir isaret ekler (yedekli / bekliyor / duraklatildi / hata).
+// Dolphin icin durum rozetleri: kdlite ile esitlenen klasorlerdeki ve bulut
+// klasorundeki dosya ve klasorlerin simgesine kucuk bir isaret ekler
+// (esit / bekliyor / duraklatildi / hata / yalnizca bulutta / yalnizca bilgisayarda).
 //
 // Eklenti kdlite servisiyle konusmaz; yalnizca servisin ~/.config/kdlite
 // altina yazdigi durum dosyalarini okur (token'in durdugu config.toml haric).
@@ -31,6 +32,12 @@ struct Rec {
     qint64 size;
     qint64 mtime;
 };
+// Bir alt klasorun icindeki (tum derinlikteki) dosyalarin ozeti.
+struct Agg {
+    int tracked = 0; // bulutta kopyasi olanlar
+    int cloud = 0; // bunlardan yalnizca bulutta olanlar
+    int local = 0; // yalnizca bilgisayarda olanlar
+};
 struct Source {
     QString root; // sonunda '/' ile
     QString name;
@@ -38,7 +45,17 @@ struct Source {
     QHash<QString, Rec> files;
     QSet<QString> cloudOnly; // yerelde yalnizca kisayolu olanlar
     QSet<QString> localOnly; // yedeklenmeyenler
+    QHash<QString, Agg> dirs; // alt klasor -> icindekilerin ozeti
 };
+// `rel` dosyasinin butun ust klasorleri icin `fn` cagirir.
+template<typename F> void eachParent(const QString &rel, F fn)
+{
+    int i = rel.lastIndexOf(QLatin1Char('/'));
+    while (i > 0) {
+        fn(rel.left(i));
+        i = rel.lastIndexOf(QLatin1Char('/'), i - 1);
+    }
+}
 
 QJsonDocument readJson(const QString &path)
 {
@@ -124,7 +141,7 @@ private:
                     return {OK};
                 }
             }
-            return {};
+            return {CLOUD_ONLY};
         }
         for (const Source &s : m_sources) {
             if (path + QLatin1Char('/') == s.root) {
@@ -147,8 +164,19 @@ private:
             if (fi.isSymLink()) {
                 return s.cloudOnly.contains(rel) ? QStringList{CLOUD_ONLY} : QStringList{};
             }
+            if (fi.isDir()) {
+                // Alt klasor: icindekilere gore.
+                const auto d = s.dirs.constFind(rel);
+                if (d == s.dirs.constEnd()) {
+                    return {};
+                }
+                if (d->tracked == 0) {
+                    return d->local > 0 ? QStringList{LOCAL_ONLY} : QStringList{};
+                }
+                return {d->cloud == d->tracked ? CLOUD_ONLY : OK};
+            }
             if (!fi.isFile()) {
-                return {}; // alt klasorler: rozet yok
+                return {};
             }
             if (s.localOnly.contains(rel)) {
                 return {LOCAL_ONLY};
@@ -213,6 +241,15 @@ private:
             for (auto it = files.constBegin(); it != files.constEnd(); ++it) {
                 const QJsonObject r = it.value().toObject();
                 s.files.insert(it.key(), Rec{r.value(QLatin1String("size")).toInteger(), r.value(QLatin1String("mtime")).toInteger()});
+                const bool cloud = s.cloudOnly.contains(it.key());
+                eachParent(it.key(), [&](const QString &dir) {
+                    Agg &a = s.dirs[dir];
+                    a.tracked++;
+                    a.cloud += cloud ? 1 : 0;
+                });
+            }
+            for (const QString &rel : std::as_const(s.localOnly)) {
+                eachParent(rel, [&](const QString &dir) { s.dirs[dir].local++; });
             }
             m_sources.push_back(std::move(s));
         }

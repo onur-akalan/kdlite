@@ -2,9 +2,9 @@
 
 A lightweight cloud drive client for Linux and KDE Plasma.
 
-kdlite shows your cloud drive as a normal folder, downloads files only when
-you open them, and backs up the local folders you choose. It runs quietly in
-the system tray.
+kdlite keeps the folders you choose in sync with your cloud drive, lets you
+decide file by file what takes up space on your computer, and shows the whole
+drive as a normal folder. It runs quietly in the system tray.
 
 **Supported today:** [Infomaniak kDrive](https://www.infomaniak.com/en/ksuite/kdrive).
 More providers are planned.
@@ -13,15 +13,18 @@ More providers are planned.
 
 ## What it does
 
-- **Your drive as a folder.** Browse, open, save and edit files in
-  `~/kDrive-bulut` (you can change the location in *Settings*). Files
-  download on first use.
-- **Automatic backup.** Choose folders to back up and where they go in the
-  cloud. Changes upload within seconds.
+- **Two-way sync for the folders you pick.** Add a folder from your computer,
+  or bring a cloud folder to your computer. Local changes upload within
+  seconds; changes made in the cloud (phone, web, another computer) arrive
+  within minutes.
 - **You decide where each file lives.** Cloud only, cloud and computer, or
-  computer only. Right-click any file to choose.
-- **Nothing is lost by accident.** Deleted files go to the cloud trash, never
-  straight to oblivion. Large deletions ask for confirmation first.
+  computer only. Right-click any file or folder to choose.
+- **Your whole drive as a folder.** Browse, open, save, move and rename
+  anything in `~/kDrive-bulut` (you can change the location in *Settings*),
+  including folders you do not sync. Files download on first use.
+- **Nothing is lost by accident.** Deleted files go to the trash, on the side
+  where they are removed, never straight to oblivion. Large deletions ask for
+  confirmation first. If a file changed on both sides, both versions are kept.
 - **Fits into KDE.** Tray icon with status, a native settings window, Dolphin
   right-click menu and status badges on files.
 - **Small.** A single Rust process using around 10 MB of memory when idle.
@@ -94,10 +97,10 @@ computer, in a file only you can read.
 ## Everyday use
 
 - **Tray icon:** click to open the window. The menu has pause, resume and
-  *Back up now*.
-- **Window:** add folders, see their status, open *Settings*. The *Cloud
-  folder* section opens your drive and lets you choose cloud folders that
-  should also be kept on this computer, so they work without internet.
+  *Sync now*.
+- **Window:** add folders, see their status, open *Settings*. *Add folder…*
+  syncs a folder from your computer; *Add from cloud…* brings a cloud folder
+  to your computer, where its files start as cloud-only shortcuts.
 - **Dolphin:** right-click a file or folder and open the **kdlite** menu.
 
 ### Where a file is kept
@@ -106,7 +109,25 @@ computer, in a file only you can read.
 |---|---|
 | Keep in cloud only | The file leaves your computer; a shortcut stays and opens the cloud copy. |
 | Keep in cloud and on this computer | The file is in both places and stays in sync. |
-| Keep on this computer only | The cloud copy goes to the cloud trash; the file is no longer backed up. |
+| Keep on this computer only | The cloud copy goes to the cloud trash; the file is no longer synced. |
+
+The same three choices work in every synced folder, and each file and folder
+shows its state as a small badge in Dolphin.
+
+### How sync works
+
+| What happens | Result |
+|---|---|
+| You change or add a file on this computer | It uploads within seconds. |
+| You delete a file on this computer | The cloud copy goes to the cloud trash. |
+| A file changes in the cloud | The new version is downloaded. |
+| A file is added in the cloud | It appears here as a cloud-only shortcut. |
+| A file is moved or renamed in the cloud | It is moved or renamed here too. |
+| A file is deleted in the cloud | The copy here goes to your desktop trash. |
+| A file changed on both sides | Both are kept; yours gets “conflicting copy” in its name. |
+
+kdlite looks at the cloud every 10 minutes (changeable in *Settings*) and
+when you press *Sync now*.
 
 ## How your data is protected
 
@@ -114,8 +135,8 @@ computer, in a file only you can read.
   trash and can be restored.
 - A file is removed from your computer only after an identical copy is
   confirmed in the cloud.
-- If more than 20 files, or a whole folder's contents, vanish at once, kdlite
-  asks before touching the cloud.
+- If more than 20 files, or a whole folder's contents, vanish at once on
+  either side, kdlite asks before removing them on the other side.
 - Older versions of edited files stay in the cloud's version history.
 
 ## Settings
@@ -123,7 +144,7 @@ computer, in a file only you can read.
 Everything is in the window under *Settings*. The same values live in
 `~/.config/kdlite/config.toml`.
 
-To skip files and folders during backup, list their names in
+To skip files and folders during sync, list their names in
 `~/.config/kdlite/ignore`, one per line, like a `.gitignore`:
 
 ```
@@ -134,17 +155,16 @@ node_modules
 ## Command line
 
 ```bash
-kdlite backup add ~/Documents   # back up a folder
-kdlite backup run               # upload changes now
-kdlite pause                    # pause backups
+kdlite backup add ~/Documents   # sync a folder
+kdlite backup run               # sync now
+kdlite pause                    # pause syncing
 kdlite --help                   # everything else
 ```
 
 ## Not supported yet
 
-- Moving and renaming items inside the cloud folder
-- Two-way sync
 - Providers other than kDrive
+- Instant notice of cloud changes (they are picked up at the next check)
 
 ## Contributing
 

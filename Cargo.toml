@@ -1,8 +1,8 @@
 [package]
 name = "kdlite"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-description = "Lightweight cloud drive client for Linux and KDE: on-demand FUSE mount, folder backup, system tray. Supports Infomaniak kDrive."
+description = "Lightweight cloud drive client for Linux and KDE: on-demand FUSE mount, two-way folder sync, system tray. Supports Infomaniak kDrive."
 license = "MIT"
 repository = "https://github.com/onur-akalan/kdlite"
 readme = "README.md"

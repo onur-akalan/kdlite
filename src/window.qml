@@ -96,14 +96,14 @@ Window {
         if (running && st.freeing) return root.t("Changing where files are kept")
         if (running) {
             var p = st.progress
-            return p.total_files > 0 ? root.t("Backing up: ") + p.source + " · " + p.done_files + "/" + p.total_files + root.t(" files")
+            return p.total_files > 0 ? root.t("Syncing: ") + p.source + " · " + p.done_files + "/" + p.total_files + root.t(" files")
                                      : root.t("Scanning: ") + (p.source || "…")
         }
-        if (paused) return root.t("Backup paused")
+        if (paused) return root.t("Sync paused")
         if (sources.length === 0) return root.t("No folders selected yet")
-        if (anyFailed) return root.t("Some files could not be backed up")
-        for (var i = 0; i < sources.length; i++) if (!sources[i].last) return root.t("Waiting to back up")
-        return root.t("Everything is backed up")
+        if (anyFailed) return root.t("Some files could not be synced")
+        for (var i = 0; i < sources.length; i++) if (!sources[i].last) return root.t("Waiting to sync")
+        return root.t("Everything is in sync")
     }
     readonly property string statusDetail: {
         if (!reachable) return root.t("Restart kdlite from the application menu.")
@@ -114,7 +114,7 @@ Window {
             return p.total_files > 0 ? human(p.done_bytes) + " / " + human(p.total_bytes) + " · " + p.current : ""
         }
         if (paused) return root.t("Nothing is uploaded until you press “Resume”.")
-        if (sources.length === 0) return root.t("Add the folders you want to back up; changes flow to kDrive on their own.")
+        if (sources.length === 0) return root.t("Add the folders you want to sync; changes flow both ways on their own.")
         if (st.mount_failed > 0) return root.t("Saved to the kDrive folder: ") + st.mount_failed + root.t(" files could not be uploaded; will retry.")
         if (st.mount_pending > 0) return root.t("Saved to the kDrive folder: ") + st.mount_pending + root.t(" files uploading…")
         return st.watching ? root.t("Folders are watched; changes upload within seconds.")
@@ -131,15 +131,22 @@ Window {
 
     FolderDialog {
         id: picker
-        title: root.t("Choose a folder to back up")
+        title: root.t("Choose a folder to sync")
         onAccepted: {
             destDialog.localPath = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
             destDialog.editName = ""
             destDialog.pinMode = false
+            destDialog.cloudMode = false
             destDialog.stack = []
             destDialog.load()
             destDialog.open()
         }
+    }
+
+    FolderDialog {
+        id: parentPicker
+        title: root.t("Where on this computer should the folder go?")
+        onAccepted: destDialog.cloudParent = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
     }
 
     // Buluttaki hedef: klasor kDrive'da nereye yedeklensin?
@@ -148,6 +155,9 @@ Window {
         property string localPath: ""
         property string editName: ""   // doluysa: var olan yedegin yeri degistiriliyor
         property bool pinMode: false   // true: bilgisayarda da tutulacak bulut klasoru seciliyor
+        property bool cloudMode: false // true: bilgisayara getirilecek bulut klasoru seciliyor
+        property string cloudParent: "" // getirilen klasorun konacagi yerel klasor
+        readonly property bool browseOnly: pinMode || cloudMode
         property var stack: []     // girilen bulut klasorleri: [{id, name}]
         property var dirs: []
         property bool loading: false
@@ -159,6 +169,11 @@ Window {
             root.api("/api/cloud" + id, undefined, function(j) { destDialog.dirs = j.dirs; destDialog.loading = false })
         }
         function add(dest) {
+            if (cloudMode) {
+                root.api("/api/add_cloud", { cloud: here, parent: cloudParent }, function() { root.errorText = ""; root.refresh() })
+                close()
+                return
+            }
             if (pinMode) {
                 root.api("/api/pin", { paths: [here], on: true }, function() { root.errorText = ""; root.refresh() })
                 close()
@@ -169,7 +184,8 @@ Window {
             root.api(editName ? "/api/edit" : "/api/add", body, function() { root.errorText = ""; root.refresh() })
             close()
         }
-        title: pinMode ? root.t("Which cloud folder should also be kept on this computer?") : root.t("Where in kDrive should it go?")
+        title: cloudMode ? root.t("Which cloud folder do you want on this computer?")
+             : pinMode ? root.t("Which cloud folder should also be kept on this computer?") : root.t("Where in kDrive should it go?")
         modal: true
         parent: QQC.Overlay.overlay
         anchors.centerIn: parent
@@ -180,7 +196,9 @@ Window {
             QQC.Label {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
-                text: destDialog.pinMode
+                text: destDialog.cloudMode
+                      ? root.t("Open the folder you want and press “Add this folder”. It appears on this computer as a normal folder and stays in sync. Its files start as “cloud only” shortcuts and take no space until you choose to keep them here.")
+                      : destDialog.pinMode
                       ? root.t("Open the folder you want and press “Keep this folder”. Its files are downloaded and stay available without internet; changes still go to the cloud.")
                       : "“" + destDialog.folderName + root.t("”: choose its place in the cloud. The folder is created inside the place you pick, under its own name.")
                       + (destDialog.editName ? root.t(" The copy at the old place is not deleted; files are uploaded again to the new place.") : "")
@@ -233,21 +251,37 @@ Window {
                 elide: Text.ElideMiddle
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                visible: !destDialog.pinMode
+                visible: !destDialog.browseOnly
                 text: root.t("Destination: ") + (destDialog.here ? destDialog.here + "/" : "") + destDialog.folderName
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: destDialog.cloudMode
+                QQC.Label {
+                    Layout.fillWidth: true
+                    elide: Text.ElideMiddle
+                    opacity: 0.7
+                    font: Kirigami.Theme.smallFont
+                    text: root.t("On this computer: ") + root.shortPath(destDialog.cloudParent)
+                          + "/" + (destDialog.stack.length > 0 ? destDialog.stack[destDialog.stack.length - 1].name : "…")
+                }
+                QQC.Button {
+                    text: root.t("Change…")
+                    onClicked: { parentPicker.currentFolder = "file://" + destDialog.cloudParent; parentPicker.open() }
+                }
             }
         }
         footer: QQC.DialogButtonBox {
             QQC.Button {
                 text: root.t("Default place (") + (root.st ? root.st.backup_root : "") + ")"
-                visible: !destDialog.pinMode
+                visible: !destDialog.browseOnly
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.ActionRole
                 onClicked: destDialog.add(undefined)
             }
             QQC.Button {
-                text: destDialog.pinMode ? root.t("Keep this folder") : root.t("Back up here")
+                text: destDialog.cloudMode ? root.t("Add this folder") : destDialog.pinMode ? root.t("Keep this folder") : root.t("Sync here")
                 icon.name: "dialog-ok-apply"
-                enabled: !destDialog.pinMode || destDialog.here.length > 0
+                enabled: !destDialog.browseOnly || destDialog.here.length > 0
                 QQC.DialogButtonBox.buttonRole: QQC.DialogButtonBox.AcceptRole
                 onClicked: destDialog.add(destDialog.here)
             }
@@ -270,7 +304,7 @@ Window {
         QQC.Label {
             width: parent.width
             wrapMode: Text.WordWrap
-            text: "“" + root.pendingRemove + root.t("” will no longer be backed up. The cloud copy is not deleted.")
+            text: "“" + root.pendingRemove + root.t("” will no longer be synced. The cloud copy is not deleted.")
         }
         onAccepted: root.api("/api/remove", { name: root.pendingRemove }, function() { root.refresh() })
     }
@@ -287,7 +321,7 @@ Window {
             width: parent.width
             wrapMode: Text.WordWrap
             text: root.t("The API token is removed from this computer and the kDrive folder is disconnected. ")
-                + root.t("Your backup list, settings and cloud files stay as they are.\n\n")
+                + root.t("Your folder list, settings and cloud files stay as they are.\n\n")
                 + root.t("The setup wizard opens next; you can connect again with the same or another token.")
         }
         onAccepted: { root.view = "main"; root.api("/api/logout", {}, function() {}) }
@@ -457,11 +491,11 @@ Window {
             }
             QQC.TextField {
                 id: rootField
-                Kirigami.FormData.label: root.t("Default backup place:")
+                Kirigami.FormData.label: root.t("Default place in the cloud:")
                 Layout.fillWidth: true
             }
             RowLayout {
-                Kirigami.FormData.label: root.t("Not backed up:")
+                Kirigami.FormData.label: root.t("Not synced:")
                 spacing: Kirigami.Units.largeSpacing
                 QQC.Button {
                     text: root.t("Edit list…")
@@ -487,7 +521,7 @@ Window {
             }
             QQC.SpinBox {
                 id: rescanSpin
-                Kirigami.FormData.label: root.t("Safety rescan (minutes):")
+                Kirigami.FormData.label: root.t("Check the cloud every (minutes):")
                 from: 1; to: 1440
             }
             QQC.Label {
@@ -616,7 +650,7 @@ Window {
                 Layout.fillWidth: true
                 wrapMode: Text.WordWrap
                 visible: !wizard.done && wizard.drives.length > 0
-                text: root.t("2. Choose the drive and the folder kdlite will see. Backups go inside this folder too.")
+                text: root.t("2. Choose the drive and the folder kdlite will see. Synced folders go inside this folder too.")
             }
             Kirigami.FormLayout {
                 Layout.fillWidth: true
@@ -699,13 +733,13 @@ Window {
                     icon.name: root.paused ? "media-playback-start" : "media-playback-pause"
                     enabled: root.st !== null && root.reachable
                     onClicked: root.api("/api/pause", { on: !root.paused }, function() { root.refresh() })
-                    QQC.ToolTip.text: root.paused ? root.t("Continue backing up where it left off")
+                    QQC.ToolTip.text: root.paused ? root.t("Continue syncing where it left off")
                                                   : root.t("Stop uploading; nothing is sent until you press “Resume”")
                     QQC.ToolTip.visible: hovered
                     QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
                 }
                 QQC.Button {
-                    text: root.t("Back up now")
+                    text: root.t("Sync now")
                     icon.name: "cloud-upload"
                     enabled: root.reachable && !root.running && root.sources.length > 0
                     onClicked: root.api("/api/run", {}, function() { root.refresh() })
@@ -782,6 +816,7 @@ Window {
                     enabled: root.reachable && root.drive !== null && root.drive.mounted
                     onClicked: {
                         destDialog.pinMode = true
+                        destDialog.cloudMode = false
                         destDialog.editName = ""
                         destDialog.localPath = ""
                         destDialog.stack = []
@@ -871,7 +906,25 @@ Window {
                 Kirigami.Heading {
                     Layout.fillWidth: true
                     level: 4
-                    text: root.t("Backed-up folders")
+                    text: root.t("Synced folders")
+                }
+                QQC.Button {
+                    text: root.t("Add from cloud…")
+                    icon.name: "folder-cloud"
+                    enabled: root.reachable
+                    QQC.ToolTip.text: root.t("Bring a cloud folder to this computer and keep it in sync")
+                    QQC.ToolTip.visible: hovered
+                    QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
+                    onClicked: {
+                        destDialog.pinMode = false
+                        destDialog.cloudMode = true
+                        destDialog.cloudParent = root.st ? root.st.home : ""
+                        destDialog.editName = ""
+                        destDialog.localPath = ""
+                        destDialog.stack = []
+                        destDialog.load()
+                        destDialog.open()
+                    }
                 }
                 QQC.Button {
                     text: root.t("Add folder…")
@@ -899,7 +952,7 @@ Window {
                         visible: list.count === 0 && root.st !== null
                         icon.name: "folder-cloud"
                         text: root.t("The list is empty")
-                        explanation: root.t("Use “Add folder…” to choose the folders you want to back up.")
+                        explanation: root.t("Use “Add folder…” or “Add from cloud…” to choose the folders you want to sync.")
                     }
 
                     delegate: QQC.ItemDelegate {
@@ -909,12 +962,13 @@ Window {
                         hoverEnabled: true
                         readonly property var stats: modelData.last ? modelData.last.stats : null
                         readonly property int pendingDeletes: stats && stats.pending_deletes ? stats.pending_deletes : 0
+                        readonly property int pendingCloud: stats && stats.pending_cloud_deletes ? stats.pending_cloud_deletes : 0
                         readonly property bool active: root.running && root.st.progress.source === modelData.name
-                        readonly property string badge: active ? root.t("Backing up") : !modelData.exists ? root.t("Folder not found")
+                        readonly property string badge: active ? root.t("Syncing") : !modelData.exists ? root.t("Folder not found")
                             : root.paused ? root.t("Paused")
                             : (modelData.last && modelData.last.error) ? root.t("Error")
                             : (stats && stats.failed > 0) ? stats.failed + root.t(" files failed")
-                            : stats ? root.t("Backed up") : root.t("Waiting")
+                            : stats ? root.t("In sync") : root.t("Waiting")
                         readonly property string emblem: active ? "state-sync" : !modelData.exists ? "emblem-warning"
                             : root.paused ? "emblem-pause" : bad ? "emblem-warning" : stats ? "emblem-checked" : ""
                         readonly property bool bad: !modelData.exists || (modelData.last && modelData.last.error) || (stats && stats.failed > 0)
@@ -993,6 +1047,31 @@ Window {
                                         onClicked: root.api("/api/deletes", { name: row.modelData.name, apply: false }, function() { root.refresh() })
                                     }
                                 }
+                                // Bulutta silinenler icin onay.
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    visible: row.pendingCloud > 0
+                                    spacing: Kirigami.Units.smallSpacing
+                                    QQC.Label {
+                                        Layout.fillWidth: true
+                                        wrapMode: Text.WordWrap
+                                        font: Kirigami.Theme.smallFont
+                                        color: Kirigami.Theme.neutralTextColor
+                                        text: row.pendingCloud + root.t(" files were deleted in the cloud. Remove them from this computer too?")
+                                    }
+                                    QQC.Button {
+                                        text: root.t("Remove from this computer too")
+                                        icon.name: "edit-delete"
+                                        onClicked: root.api("/api/deletes", { name: row.modelData.name, apply: true, cloud: true }, function() { root.refresh() })
+                                        QQC.ToolTip.text: root.t("Moved to the trash of this computer; can be restored from there")
+                                        QQC.ToolTip.visible: hovered
+                                        QQC.ToolTip.delay: Kirigami.Units.toolTipDelay
+                                    }
+                                    QQC.Button {
+                                        text: root.t("Keep and upload again")
+                                        onClicked: root.api("/api/deletes", { name: row.modelData.name, apply: false, cloud: true }, function() { root.refresh() })
+                                    }
+                                }
                                 Repeater {
                                     model: row.errors
                                     QQC.Label {
@@ -1018,6 +1097,7 @@ Window {
                                 onClicked: {
                                     destDialog.editName = row.modelData.name
                                     destDialog.pinMode = false
+                                    destDialog.cloudMode = false
                                     destDialog.localPath = row.modelData.local
                                     destDialog.stack = []
                                     destDialog.load()
