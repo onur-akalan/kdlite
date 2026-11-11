@@ -492,6 +492,9 @@ impl Backup<'_> {
         let now = now_secs();
         let mut pending: Vec<LocalFile> = Vec::new();
         for f in w.files {
+            // Yerelde gercek dosya duruyor: "yalnizca bulutta" isareti eskimis
+            // olabilir (yarida kesilen bir islemden kalma).
+            rs.cloud_only.remove(&f.rel);
             match rs.files.get(&f.rel) {
                 Some(r) if r.size == f.size && r.mtime == f.mtime => {}
                 _ if rs.local_only.contains(&f.rel) => {} // yalnizca bilgisayarda
@@ -1196,7 +1199,7 @@ impl Backup<'_> {
 
     /// Bulutta ve bilgisayarda: yalnizca buluttaki dosya geri indirilir;
     /// yalnizca bilgisayardaki dosya yeniden yedeklenmek uzere isaretlenir.
-    fn to_both(&self, item: &Item, rs: &mut RootState, cloud_root: &Path) -> Result<Option<u64>> {
+    fn to_both(&self, item: &Item, rs: &mut RootState, _cloud_root: &Path) -> Result<Option<u64>> {
         if !item.link {
             return Ok(rs.local_only.remove(&item.rel).then_some(0));
         }
@@ -1204,20 +1207,10 @@ impl Backup<'_> {
             return Ok(None); // bizim olusturmadigimiz bir bag
         }
         let rec = rs.files.get(&item.rel).cloned().ok_or_else(|| anyhow!("{}", tr!("record not found")))?;
-        let name = item.abs.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let tmp = item.abs.with_file_name(format!(".{}.kdlite.part", name));
-        std::fs::copy(cloud_root.join(&item.rel), &tmp).context(tr!("could not download from the cloud"))?;
-        let ok = std::fs::metadata(&tmp).is_ok_and(|m| m.len() == rec.size);
-        if !ok {
-            let _ = std::fs::remove_file(&tmp);
-            bail!("{}", tr!("the downloaded file has the wrong size"));
-        }
-        // Buluttaki zamani koru ki dosya yeniden yuklenmesin.
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open(&tmp)?
-            .set_modified(UNIX_EPOCH + Duration::from_secs(rec.mtime.max(0) as u64))?;
-        std::fs::rename(&tmp, &item.abs)?; // kisayolun yerine gecer
+        // Dogrudan buluttan indir: kendi bagladigimiz klasorden okumak,
+        // kapanis sirasinda surecin kendi kendini beklemesine yol acabilir.
+        let entry = Entry { id: rec.id, name: String::new(), is_dir: false, size: rec.size, mtime: rec.mtime };
+        self.fetch(&entry, &item.abs)?; // kisayolun yerine gecer
         rs.cloud_only.remove(&item.rel);
         Ok(Some(rec.size))
     }

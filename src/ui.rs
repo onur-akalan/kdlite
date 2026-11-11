@@ -62,6 +62,8 @@ pub struct Ui {
     pub sync_deletes: bool,
     /// Toplu silme icin onay verilen yedekler (bir sonraki calismada uygulanir).
     confirmed: Mutex<BTreeSet<String>>,
+    /// Servis kapaniyor: yeni is baslatilmaz, suren is durdurulur.
+    stopping: AtomicBool,
     /// Bulutta silinenlerin yerelden kaldirilmasina onay verilen esitlemeler.
     confirmed_cloud: Mutex<BTreeSet<String>>,
     /// Silme onayi icin bildirimi gosterilen yedekler (ad -> dosya sayisi).
@@ -235,6 +237,7 @@ impl Ui {
             show_after: AtomicBool::new(false),
             sync_deletes: true,
             confirmed: Mutex::new(BTreeSet::new()),
+            stopping: AtomicBool::new(false),
             confirmed_cloud: Mutex::new(BTreeSet::new()),
             asked: Mutex::new(BTreeMap::new()),
             mount: Mutex::new(None),
@@ -346,6 +349,19 @@ impl Ui {
         });
     }
 
+    /// Kapanmadan once: suren isi durdurur ve bitmesini bekler. Calisan is
+    /// bagli bulut klasorune dokunabilir; o surerken baglanti ayrilirsa
+    /// surec kendi kendini bekleyip kapanamaz.
+    pub fn stop_work(&self) {
+        // Bundan sonra baslayan isler de hemen dursun.
+        self.stopping.store(true, Ordering::SeqCst);
+        self.cancel.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while self.running.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+
     /// Listedeki kaynaklari (ya da yalnizca `only` icindekileri) yedekler.
     /// Zaten calisiyorsa hicbir sey yapmaz. Henuz yazimi bitmedigi icin
     /// ertelenen dosyasi olan yedeklerin adlarini doner.
@@ -355,7 +371,7 @@ impl Ui {
             return only.cloned().unwrap_or_default();
         }
         // Elle baslatilan yedekleme duraklatilmisken de calisir.
-        self.cancel.store(false, Ordering::SeqCst);
+        self.cancel.store(self.stopping.load(Ordering::SeqCst), Ordering::SeqCst);
         for src in backup::load_sources() {
             if self.cancel.load(Ordering::SeqCst) {
                 break;
@@ -574,7 +590,7 @@ impl Ui {
             std::thread::sleep(Duration::from_millis(300));
         }
         self.freeing.store(true, Ordering::SeqCst);
-        self.cancel.store(false, Ordering::SeqCst);
+        self.cancel.store(self.stopping.load(Ordering::SeqCst), Ordering::SeqCst);
         let b = self.backup();
         let (mut done, mut bytes, mut kept) = (0, 0, 0);
         let mut errors: Vec<String> = Vec::new();

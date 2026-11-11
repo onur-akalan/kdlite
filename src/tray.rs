@@ -396,6 +396,7 @@ pub fn run(c: Ctx, ui: Arc<Ui>, port: u16, hidden: bool) -> Result<()> {
     log::info!("kapatiliyor");
     let reopen = window_open(&window);
     close_window(&window);
+    ui.stop_work();
     if let Some((s, inner)) = session.lock().unwrap().take() {
         inner.flush_pending(); // bekleyen yazmalari gonder
         drop(s); // baglantiyi ayirir
