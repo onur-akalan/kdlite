@@ -42,22 +42,37 @@ pub fn spawn_window(port: u16) -> Result<Child> {
         .replace("@LANG@", crate::i18n::lang())
         .replace("@STRINGS@", crate::i18n::catalog_json());
     std::fs::write(&qml, text)?;
-    let mut cmd = Command::new("qml6");
-    cmd.arg(&qml)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    if std::env::var_os("QT_QUICK_CONTROLS_STYLE").is_none() {
-        cmd.env("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop");
+    // Calistiricinin adi dagitima gore degisir: Arch ve Debian "qml6",
+    // Fedora "qml-qt6"; bazilarinda yalnizca Qt'nin kendi klasorunde durur.
+    for runner in QML_RUNNERS {
+        let mut cmd = Command::new(runner);
+        cmd.arg(&qml)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        if std::env::var_os("QT_QUICK_CONTROLS_STYLE").is_none() {
+            cmd.env("QT_QUICK_CONTROLS_STYLE", "org.kde.desktop");
+        }
+        // Yazilimsal cizim: bu basit pencere icin GPU surucusunu yuklemeye
+        // gerek yok, bellek kullanimi yaklasik yariya iner.
+        if std::env::var_os("QT_QUICK_BACKEND").is_none() {
+            cmd.env("QT_QUICK_BACKEND", "software");
+        }
+        match cmd.spawn() {
+            Ok(child) => return Ok(child),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e).context(format!("{} could not be started", runner)),
+        }
     }
-    // Yazilimsal cizim: bu basit pencere icin GPU surucusunu yuklemeye
-    // gerek yok, bellek kullanimi yaklasik yariya iner.
-    if std::env::var_os("QT_QUICK_BACKEND").is_none() {
-        cmd.env("QT_QUICK_BACKEND", "software");
-    }
-    cmd.spawn()
-        .context("pencere acilamadi (qml6 bulunamadi; qt6-declarative paketi gerekli)")
+    anyhow::bail!("the window could not be opened: no Qt 6 QML runner found (qml6 or qml-qt6; install the Qt 6 Declarative tools)")
 }
+
+const QML_RUNNERS: &[&str] = &[
+    "qml6",
+    "qml-qt6",
+    "/usr/lib/qt6/bin/qml",
+    "/usr/lib64/qt6/bin/qml",
+];
 
 type Window = Arc<Mutex<Option<Child>>>;
 

@@ -30,8 +30,51 @@ Başka sağlayıcılar planlanıyor.
 
 ## Kurulum
 
-Rust, FUSE 3 ve pencere için `qt6-declarative`, `kirigami` ve
-`qqc2-desktop-style` gerekir.
+kdlite, KDE Plasma 6 kurulu her x86_64 Linux dağıtımında çalışır. Arch
+Linux, Fedora 45 ve Debian 13 üzerinde denendi.
+
+**1. kdlite'ın ihtiyaç duyduklarını kur** (çoğu Plasma masaüstünde zaten
+vardır):
+
+| Dağıtım | Komut |
+|---|---|
+| Arch, Manjaro | `sudo pacman -S fuse3 libnotify qt6-declarative kirigami qqc2-desktop-style` |
+| Fedora | `sudo dnf install fuse3 libnotify qt6-qtdeclarative-devel kf6-kirigami kf6-qqc2-desktop-style` |
+| Debian, Ubuntu | `sudo apt install fuse3 libnotify-bin qml-qt6 qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-dialogs qml6-module-org-kde-kirigami qml6-module-org-kde-desktop` |
+
+**2. kdlite'ı indir ve kur.**
+[Sürümler sayfasından](https://github.com/onur-akalan/kdlite/releases) en son
+`kdlite-…-x86_64-linux.tar.gz` dosyasını indir, sonra:
+
+```bash
+tar xzf kdlite-*-x86_64-linux.tar.gz
+cd kdlite-*-x86_64-linux
+./install.sh
+```
+
+Yönetici yetkisi gerekmez; her şey ev klasörüne kurulur. `install.sh` için
+isteğe bağlı seçenekler:
+
+| Seçenek | Ne yapar |
+|---|---|
+| `--autostart` | kdlite'ı oturum açılışında başlatır |
+| `--dolphin` | Dolphin'de dosyalara durum rozeti ekler (küçük bir eklenti derler, aşağıya bak) |
+| `--remove` | Kaldırır; ayarların korunur |
+
+Rozet eklentisi senin bilgisayarında derlenir; bir derleyici ve KDE
+geliştirme dosyaları gerekir:
+
+| Dağıtım | Paketler |
+|---|---|
+| Arch, Manjaro | `cmake gcc kio` |
+| Fedora | `cmake gcc-c++ kf6-kio-devel` |
+| Debian, Ubuntu | `cmake g++ libkf6kio-dev` |
+
+Rozetler, oturumu kapatıp açtıktan sonra görünür.
+
+### Kaynaktan derleme
+
+Yukarıdaki paketlere ek olarak Rust gerekir.
 
 ```bash
 git clone https://github.com/onur-akalan/kdlite.git
@@ -39,14 +82,6 @@ cd kdlite
 cargo build --release
 ./install.sh
 ```
-
-Yönetici yetkisi gerekmez. `install.sh` için isteğe bağlı seçenekler:
-
-| Seçenek | Ne yapar |
-|---|---|
-| `--autostart` | kdlite'ı oturum açılışında başlatır |
-| `--dolphin` | Dolphin'de dosyalara durum rozeti ekler (`cmake` ve `kio` gerekir) |
-| `--remove` | Kaldırır; ayarların korunur |
 
 ## İlk açılış
 

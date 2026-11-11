@@ -29,8 +29,51 @@ More providers are planned.
 
 ## Install
 
-You need Rust, FUSE 3, and for the window `qt6-declarative`, `kirigami` and
-`qqc2-desktop-style`.
+kdlite runs on any x86_64 Linux distribution with KDE Plasma 6. It was
+tested on Arch Linux, Fedora 45 and Debian 13.
+
+**1. Install what kdlite needs** (most of it is already there on a Plasma
+desktop):
+
+| Distribution | Command |
+|---|---|
+| Arch, Manjaro | `sudo pacman -S fuse3 libnotify qt6-declarative kirigami qqc2-desktop-style` |
+| Fedora | `sudo dnf install fuse3 libnotify qt6-qtdeclarative-devel kf6-kirigami kf6-qqc2-desktop-style` |
+| Debian, Ubuntu | `sudo apt install fuse3 libnotify-bin qml-qt6 qml6-module-qtquick-controls qml6-module-qtquick-layouts qml6-module-qtquick-dialogs qml6-module-org-kde-kirigami qml6-module-org-kde-desktop` |
+
+**2. Download and install kdlite.** Get the latest
+`kdlite-…-x86_64-linux.tar.gz` from the
+[releases page](https://github.com/onur-akalan/kdlite/releases), then:
+
+```bash
+tar xzf kdlite-*-x86_64-linux.tar.gz
+cd kdlite-*-x86_64-linux
+./install.sh
+```
+
+No root access is needed; everything goes into your home folder. Optional
+flags for `install.sh`:
+
+| Flag | What it does |
+|---|---|
+| `--autostart` | Start kdlite when you log in |
+| `--dolphin` | Add status badges to files in Dolphin (builds a small plugin, see below) |
+| `--remove` | Uninstall; your settings are kept |
+
+The badge plugin is built on your computer and needs a compiler and the KDE
+development files:
+
+| Distribution | Packages |
+|---|---|
+| Arch, Manjaro | `cmake gcc kio` |
+| Fedora | `cmake gcc-c++ kf6-kio-devel` |
+| Debian, Ubuntu | `cmake g++ libkf6kio-dev` |
+
+Badges appear after you log out and back in.
+
+### Build from source
+
+You need Rust in addition to the packages above.
 
 ```bash
 git clone https://github.com/onur-akalan/kdlite.git
@@ -38,14 +81,6 @@ cd kdlite
 cargo build --release
 ./install.sh
 ```
-
-No root access is needed. Optional flags for `install.sh`:
-
-| Flag | What it does |
-|---|---|
-| `--autostart` | Start kdlite when you log in |
-| `--dolphin` | Add status badges to files in Dolphin (needs `cmake` and `kio`) |
-| `--remove` | Uninstall; your settings are kept |
 
 ## First run
 
