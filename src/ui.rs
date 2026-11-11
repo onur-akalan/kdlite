@@ -72,6 +72,14 @@ pub struct Ui {
     mount: Mutex<Option<Arc<crate::fs::Inner>>>,
     /// Indirilmis dosyalarin son olculen boyutu (dosya, bayt, kalici bayt).
     usage: Mutex<Option<(Instant, (usize, u64, u64))>>,
+    /// Yeni surume bakilip haber verilsin mi (ayar).
+    pub check_updates: bool,
+    /// Guncelleme durumu (pencerede gosterilir).
+    update: Mutex<Value>,
+    /// Bulunan yeni surum (kurulmayi bekliyor).
+    release: Mutex<Option<crate::update::Release>>,
+    /// Yeni surum kuruldu: yeniden baslarken kurulu program calistirilsin.
+    pub updated: AtomicBool,
 }
 
 fn autostart_path() -> PathBuf {
@@ -242,6 +250,10 @@ impl Ui {
             asked: Mutex::new(BTreeMap::new()),
             mount: Mutex::new(None),
             usage: Mutex::new(None),
+            check_updates: true,
+            update: Mutex::new(json!({ "status": "idle" })),
+            release: Mutex::new(None),
+            updated: AtomicBool::new(false),
         }
     }
 
@@ -715,6 +727,154 @@ impl Ui {
         Ok(())
     }
 
+    fn update_state(&self) -> Value {
+        let mut v = self.update.lock().unwrap().clone();
+        v["current"] = json!(crate::update::current());
+        v["enabled"] = json!(self.check_updates);
+        v["blocked"] = json!(crate::update::blocked());
+        v
+    }
+
+    fn set_update(&self, fields: Value) {
+        let mut st = self.update.lock().unwrap();
+        if let (Some(dst), Some(src)) = (st.as_object_mut(), fields.as_object()) {
+            for (k, v) in src {
+                dst.insert(k.clone(), v.clone());
+            }
+        }
+    }
+
+    /// Son surume bakar; yeniyse saklar. Kurulum suruyorsa dokunmaz.
+    fn check_update(&self) -> Result<Option<crate::update::Release>> {
+        let busy = |s: &Value| matches!(s["status"].as_str(), Some("installing" | "restarting"));
+        if busy(&self.update.lock().unwrap()) {
+            return Ok(self.release.lock().unwrap().clone());
+        }
+        self.set_update(json!({ "status": "checking", "error": null }));
+        match crate::update::check() {
+            Ok(rel) => {
+                self.set_update(json!({
+                    "status": if rel.is_some() { "available" } else { "uptodate" },
+                    "latest": rel.as_ref().map(|r| r.version.clone()),
+                    "page": rel.as_ref().map(|r| r.page.clone()),
+                    "released": rel.as_ref().map(|r| r.date.clone()),
+                    "notes": rel.as_ref().map(|r| r.notes.clone()),
+                    "checked_at": now(),
+                }));
+                *self.release.lock().unwrap() = rel.clone();
+                Ok(rel)
+            }
+            Err(e) => {
+                self.set_update(json!({ "status": "error", "error": format!("{:#}", e), "checked_at": now() }));
+                Err(e)
+            }
+        }
+    }
+
+    /// Bulunan surumu arka planda kurar; bitince servis yeniden baslar.
+    fn update_now(self: &Arc<Self>) -> Result<()> {
+        if let Some(why) = crate::update::blocked() {
+            bail!("{}", why);
+        }
+        let rel = match self.release.lock().unwrap().clone() {
+            Some(r) => r,
+            None => match self.check_update()? {
+                Some(r) => r,
+                None => bail!("{}", tr!("kdlite is up to date")),
+            },
+        };
+        let me = self.clone();
+        std::thread::spawn(move || me.install_release(rel));
+        Ok(())
+    }
+
+    fn install_release(&self, rel: crate::update::Release) {
+        {
+            let mut st = self.update.lock().unwrap();
+            if matches!(st["status"].as_str(), Some("installing" | "restarting")) {
+                return;
+            }
+            st["status"] = json!("installing");
+            st["error"] = Value::Null;
+        }
+        log::info!("guncelleme kuruluyor: {} -> {}", crate::update::current(), rel.version);
+        if let Err(e) = crate::update::install(&rel) {
+            log::warn!("guncelleme kurulamadi: {:#}", e);
+            self.set_update(json!({ "status": "error", "error": format!("{:#}", e) }));
+            return;
+        }
+        // Suren bir esitlemeyi yarida kesmemek icin bitmesini bekle (en fazla 30 dk).
+        self.set_update(json!({ "status": "restarting" }));
+        let deadline = Instant::now() + Duration::from_secs(30 * 60);
+        while self.running.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_secs(5));
+        }
+        log::info!("{} kuruldu; yeniden baslatiliyor", rel.version);
+        crate::update::leave_note();
+        self.updated.store(true, Ordering::SeqCst);
+        self.restart.store(true, Ordering::SeqCst);
+        if let Some(tx) = self.quit.lock().unwrap().as_ref() {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Gunde bir kez yeni surume bakar; varsa bildirimle haber verir.
+    /// Kurulum yalnizca kullanici isterse yapilir.
+    pub fn start_updater(self: &Arc<Self>) {
+        if !self.check_updates || std::env::var_os("KDLITE_NO_UPDATE").is_some() {
+            return;
+        }
+        let me = self.clone();
+        std::thread::spawn(move || {
+            const DAY: i64 = 24 * 3600;
+            std::thread::sleep(Duration::from_secs(90)); // acilista ag hazir olsun
+            let mut last = 0i64;
+            let mut told = String::new();
+            loop {
+                // Uykudan sonra da aksamasin diye duvar saatine gore bakilir.
+                if now() - last >= DAY {
+                    last = now();
+                    if let Ok(Some(rel)) = me.check_update() {
+                        log::info!("yeni surum var: {}", rel.version);
+                        if told != rel.version {
+                            told = rel.version.clone();
+                            let me = me.clone();
+                            std::thread::spawn(move || me.offer_update(&rel));
+                        }
+                    }
+                }
+                std::thread::sleep(Duration::from_secs(3600));
+            }
+        });
+    }
+
+    /// Yeni surum bildirimi; "Guncelle" secilirse kurulur.
+    fn offer_update(self: &Arc<Self>, rel: &crate::update::Release) {
+        let mut cmd = std::process::Command::new("notify-send");
+        cmd.args(["-a", "kdlite", "-i", "system-software-update", "--wait"]);
+        let blocked = crate::update::blocked();
+        if blocked.is_none() {
+            cmd.args(["-A", &format!("install={}", tr!("Update"))]);
+        }
+        cmd.args(["-A", &format!("notes={}", tr!("What's new"))]);
+        let text = match blocked {
+            None => tr!("You have {}. Update now, or later from the kdlite window.", crate::update::current()),
+            Some(why) => format!("{} {}", tr!("You have {}.", crate::update::current()), why),
+        };
+        let out = cmd.arg(tr!("kdlite {} is available", rel.version)).arg(text).output();
+        match out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default().as_str() {
+            "install" => {
+                if let Err(e) = self.update_now() {
+                    log::warn!("guncelleme baslatilamadi: {:#}", e);
+                }
+            }
+            "notes" if !rel.page.is_empty() => {
+                let _ = std::process::Command::new("xdg-open").arg(&rel.page).spawn();
+            }
+            _ => {}
+        }
+    }
+
     pub fn state(&self) -> Value {
         let summary = backup::summary();
         let last = self.last.lock().unwrap();
@@ -761,6 +921,7 @@ impl Ui {
                 "done_bytes": p.done_bytes.load(Ordering::Relaxed),
             },
             "sources": sources,
+            "update": self.update_state(),
         })
     }
 
@@ -814,6 +975,7 @@ impl Ui {
             "exclude_count": self.excludes().len(),
             "rescan_min": (cfg.rescan_secs / 60).max(1),
             "autostart": autostart_path().exists(),
+            "check_updates": cfg.check_updates,
             "mountpoint": self.mountpoint,
             "config_path": self.config_path,
         }))
@@ -835,6 +997,11 @@ impl Ui {
         }
         if let Some(d) = body.get("sync_deletes").and_then(|v| v.as_bool()) {
             text = crate::setup::set_line(&text, "sync_deletes", &d.to_string());
+        }
+        if let Some(u) = body.get("check_updates").and_then(|v| v.as_bool()) {
+            if u != self.check_updates {
+                text = crate::setup::set_line(&text, "check_updates", &u.to_string());
+            }
         }
         if let Some(gb) = body.get("cache_max_gb").and_then(|v| v.as_f64()) {
             if !(1.0..=4000.0).contains(&gb) {
@@ -1260,6 +1427,13 @@ impl Ui {
                 }
                 None => json_err(400, "bu surec uzaktan kapatilamaz".into()),
             },
+            (true, "/api/update") => {
+                let res = if field("action") == "install" { self.update_now() } else { self.check_update().map(|_| ()) };
+                match res {
+                    Ok(()) => json_ok(self.update_state()),
+                    Err(e) => json_err(400, format!("{:#}", e)),
+                }
+            }
             (true, "/api/auto") => {
                 let on = body.get("on").and_then(|v| v.as_bool()).unwrap_or(true);
                 self.set_paused(!on);

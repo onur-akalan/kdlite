@@ -83,6 +83,7 @@ Window {
         : anyFailed ? "emblem-warning" : sources.length > 0 ? "emblem-checked" : ""
     readonly property var sources: st && st.sources ? st.sources : []
     readonly property var drive: st && st.drive ? st.drive : null
+    readonly property var upd: st && st.update ? st.update : null
     readonly property bool anyFailed: {
         for (var i = 0; i < sources.length; i++) {
             var l = sources[i].last
@@ -366,6 +367,7 @@ Window {
                 writableSwitch.checked = j.writable
                 deletesSwitch.checked = j.sync_deletes
                 autostartSwitch.checked = j.autostart
+                updatesSwitch.checked = j.check_updates
                 cacheSpin.value = Math.round(j.cache_max_gb)
                 rescanSpin.value = j.rescan_min
                 rootField.text = j.backup_root
@@ -379,6 +381,7 @@ Window {
                 writable: writableSwitch.checked,
                 sync_deletes: deletesSwitch.checked,
                 autostart: autostartSwitch.checked,
+                check_updates: updatesSwitch.checked,
                 cache_max_gb: cacheSpin.value,
                 rescan_min: rescanSpin.value,
                 backup_root: rootField.text,
@@ -441,6 +444,36 @@ Window {
                 Kirigami.FormData.label: root.t("Startup:")
                 text: root.t("Start automatically at login")
             }
+            RowLayout {
+                Kirigami.FormData.label: root.t("Updates:")
+                spacing: Kirigami.Units.largeSpacing
+                QQC.Switch {
+                    id: updatesSwitch
+                    text: root.t("Tell me when a new version is out")
+                }
+                QQC.Button {
+                    text: root.t("Check now")
+                    icon.name: "view-refresh"
+                    enabled: root.upd !== null && root.upd.status !== "checking"
+                    onClicked: root.api("/api/update", { action: "check" }, function(j) {
+                        root.refresh()
+                        if (j && j.latest && j.status === "available") { root.view = "main"; updatePopup.open() }
+                    })
+                }
+            }
+            QQC.Label {
+                Layout.fillWidth: true
+                wrapMode: Text.WordWrap
+                opacity: 0.7
+                font: Kirigami.Theme.smallFont
+                text: !root.upd ? ""
+                    : root.t("Version ") + root.upd.current
+                      + (root.upd.status === "uptodate" ? root.t(" · up to date")
+                         : root.upd.status === "available" ? root.t(" · new version: ") + root.upd.latest
+                         : root.upd.status === "checking" ? root.t(" · checking…")
+                         : root.upd.status === "error" && root.upd.error ? " · " + root.upd.error : "")
+                      + root.t(". Nothing is installed without your OK.")
+            }
             QQC.TextField {
                 id: mountField
                 Kirigami.FormData.label: root.t("Cloud folder location:")
@@ -463,7 +496,7 @@ Window {
                 wrapMode: Text.WordWrap
                 opacity: 0.7
                 font: Kirigami.Theme.smallFont
-                text: root.t("When off, the folder is read-only. When on, files you delete there go to the kDrive trash; moving and renaming are not possible.")
+                text: root.t("When off, the folder is read-only. When on, you can save, move and rename files there; files you delete go to the kDrive trash.")
             }
             QQC.Switch {
                 id: deletesSwitch
@@ -726,6 +759,101 @@ Window {
                         opacity: 0.7
                         font: Kirigami.Theme.smallFont
                         elide: Text.ElideMiddle
+                    }
+                }
+                QQC.Button {
+                    id: updateButton
+                    // Yeni surum varsa gorunur (VS Code'daki gibi); tiklayinca ayrinti acilir.
+                    visible: root.upd !== null && !!root.upd.latest
+                             && ["available", "installing", "restarting", "error"].indexOf(root.upd.status) >= 0
+                    text: root.upd && root.upd.status === "installing" ? root.t("Updating…")
+                        : root.upd && root.upd.status === "restarting" ? root.t("Restarting…") : root.t("Update")
+                    icon.name: "system-software-update"
+                    highlighted: true
+                    onClicked: updatePopup.open()
+                    QQC.Popup {
+                        id: updatePopup
+                        y: parent.height + Kirigami.Units.smallSpacing
+                        x: parent.width - width
+                        width: Kirigami.Units.gridUnit * (notesView.visible ? 26 : 20)
+                        padding: Kirigami.Units.largeSpacing
+                        contentItem: ColumnLayout {
+                            spacing: Kirigami.Units.largeSpacing
+                            Kirigami.Heading { level: 4; text: root.t("Update available") }
+                            RowLayout {
+                                spacing: Kirigami.Units.largeSpacing
+                                Kirigami.Icon {
+                                    source: "folder-cloud"
+                                    Layout.alignment: Qt.AlignTop
+                                    implicitWidth: Kirigami.Units.iconSizes.huge
+                                    implicitHeight: implicitWidth
+                                }
+                                ColumnLayout {
+                                    spacing: Kirigami.Units.smallSpacing
+                                    QQC.Label { text: "kdlite"; font.bold: true }
+                                    QQC.Label { opacity: 0.8; text: root.t("Current version: ") + (root.upd ? root.upd.current : "") }
+                                    QQC.Label { opacity: 0.8; text: root.t("Latest version: ") + (root.upd ? root.upd.latest : "") }
+                                    QQC.Label {
+                                        opacity: 0.8
+                                        visible: root.upd !== null && !!root.upd.released
+                                        text: root.t("Released: ") + (root.upd && root.upd.released
+                                              ? new Date(root.upd.released + "T12:00:00").toLocaleDateString(Qt.locale(), Locale.LongFormat) : "")
+                                    }
+                                }
+                            }
+                            QQC.Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.WordWrap
+                                visible: text.length > 0
+                                color: root.upd && root.upd.status === "error" ? Kirigami.Theme.negativeTextColor : Kirigami.Theme.textColor
+                                opacity: root.upd && root.upd.status === "error" ? 1 : 0.7
+                                font: Kirigami.Theme.smallFont
+                                text: !root.upd ? ""
+                                    : root.upd.status === "error" ? root.t("The update could not be installed: ") + root.upd.error
+                                    : root.upd.blocked ? root.upd.blocked
+                                    : root.upd.status === "installing" ? root.t("Downloading and installing…")
+                                    : root.upd.status === "restarting" ? root.t("Installed. kdlite restarts when the current sync finishes.")
+                                    : root.t("Your folders and settings are kept. kdlite restarts by itself after installing.")
+                            }
+                            // Surum notlari: GitHub'daki metin kutunun icinde gosterilir.
+                            QQC.ScrollView {
+                                id: notesView
+                                visible: false
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: Math.min(notesText.implicitHeight, Kirigami.Units.gridUnit * 16)
+                                contentWidth: availableWidth
+                                QQC.Label {
+                                    id: notesText
+                                    width: notesView.availableWidth
+                                    wrapMode: Text.WordWrap
+                                    textFormat: Text.MarkdownText
+                                    text: root.upd && root.upd.notes ? root.upd.notes : root.t("No release notes.")
+                                    onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+                                }
+                            }
+                            QQC.Label {
+                                visible: notesView.visible && root.upd !== null && !!root.upd.page
+                                text: "<a href=\"" + (root.upd ? root.upd.page : "") + "\">" + root.t("Open on GitHub") + "</a>"
+                                font: Kirigami.Theme.smallFont
+                                onLinkActivated: function(link) { Qt.openUrlExternally(link) }
+                            }
+                            RowLayout {
+                                QQC.Button {
+                                    text: notesView.visible ? root.t("Hide release notes") : root.t("Release notes")
+                                    icon.name: "documentinfo"
+                                    onClicked: notesView.visible = !notesView.visible
+                                }
+                                Item { Layout.fillWidth: true }
+                                QQC.Button {
+                                    text: root.t("Update")
+                                    icon.name: "system-software-update"
+                                    highlighted: true
+                                    enabled: root.upd !== null && !root.upd.blocked
+                                             && (root.upd.status === "available" || root.upd.status === "error")
+                                    onClicked: root.api("/api/update", { action: "install" }, function() { root.refresh() })
+                                }
+                            }
+                        }
                     }
                 }
                 QQC.Button {

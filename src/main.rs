@@ -8,6 +8,7 @@ mod pins;
 mod setup;
 mod tray;
 mod ui;
+mod update;
 mod watch;
 
 use anyhow::{bail, Context, Result};
@@ -87,6 +88,14 @@ enum Cmd {
     },
     /// Resume paused backups
     Resume {
+        #[arg(long, default_value_t = 47800)]
+        port: u16,
+    },
+    /// Check for a new version and install it
+    Update {
+        /// Only check, do not install
+        #[arg(long)]
+        check: bool,
         #[arg(long, default_value_t = 47800)]
         port: u16,
     },
@@ -450,6 +459,7 @@ fn make_ui(c: &Ctx, port: u16, config_path: PathBuf) -> Arc<ui::Ui> {
     );
     u.config_path = config_path;
     u.sync_deletes = c.cfg.sync_deletes;
+    u.check_updates = c.cfg.check_updates;
     Arc::new(u)
 }
 
@@ -548,6 +558,31 @@ fn cmd_place(mode: &str, paths: &[PathBuf], port: u16) -> Result<()> {
         body.push_str(&format!("\n{}", e));
     }
     notify(if n("done") > 0 { icon } else { "dialog-information" }, &title, &body);
+    Ok(())
+}
+
+/// Yeni surume bakar ve kurar. Servis calisiyorsa isi o yapar (kurduktan
+/// sonra kendini yeniden baslatir).
+fn cmd_update(check: bool, port: u16) -> Result<()> {
+    println!("{}", tr!("Installed version: {}", update::current()));
+    let Some(rel) = update::check()? else {
+        println!("{}", tr!("kdlite is up to date"));
+        return Ok(());
+    };
+    println!("{}", tr!("New version: {} ({})", rel.version, rel.page));
+    if check {
+        return Ok(());
+    }
+    if let Some(why) = update::blocked() {
+        bail!("{}", why);
+    }
+    match post(port, "/api/update", serde_json::json!({ "action": "install" })) {
+        Ok(_) => println!("{}", tr!("The running kdlite is installing it and restarts when done.")),
+        Err(_) => {
+            update::install(&rel)?;
+            println!("{}", tr!("Installed: {}", rel.version));
+        }
+    }
     Ok(())
 }
 
@@ -652,6 +687,7 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        Cmd::Update { check, port } => cmd_update(check, port),
         Cmd::Pins => {
             for p in pins::load() {
                 println!("{}", p);

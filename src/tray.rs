@@ -311,6 +311,14 @@ pub fn run(c: Ctx, ui: Arc<Ui>, port: u16, hidden: bool) -> Result<()> {
     let (quit_tx, quit_rx) = mpsc::channel::<()>();
     ui.set_quit(quit_tx.clone());
     ui.start()?;
+    ui.start_updater();
+    if let Some(old) = crate::update::take_note() {
+        let _ = Command::new("notify-send")
+            .args(["-a", "kdlite", "-i", "system-software-update"])
+            .arg(tr!("kdlite was updated"))
+            .arg(tr!("Version {} replaced {}.", crate::update::current(), old))
+            .spawn();
+    }
     {
         let tx = quit_tx.clone();
         ctrlc::set_handler(move || {
@@ -412,6 +420,8 @@ pub fn run(c: Ctx, ui: Arc<Ui>, port: u16, hidden: bool) -> Result<()> {
         // Kurulu yol (sembolik bag) korunur ki surec adi degismesin.
         let exe = std::env::args_os().next().map(PathBuf::from).filter(|p| p.is_absolute());
         let exe = match exe {
+            // Guncellemeden sonra yeni kurulan program calisir.
+            _ if ui.updated.load(std::sync::atomic::Ordering::SeqCst) => crate::update::installed_path(),
             Some(p) => p,
             None => std::env::current_exe()?,
         };

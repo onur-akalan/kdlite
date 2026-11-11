@@ -43,6 +43,9 @@ pub struct Config {
     /// silinsin mi.
     #[serde(default = "default_true")]
     pub sync_deletes: bool,
+    /// Gunde bir kez GitHub'da yeni surume bakilip haber verilsin mi.
+    #[serde(default = "default_true")]
+    pub check_updates: bool,
     /// Interface language: "auto" (follow the system), "en", "tr"...
     #[serde(default = "default_language")]
     pub language: String,
@@ -125,6 +128,10 @@ language = "auto"
 # Yedeklenen klasorde sildigin dosya buluttan da silinsin mi (kDrive cop
 # kutusuna gider, oradan geri alinabilir). false = bulutta kalir.
 sync_deletes = true
+
+# Gunde bir kez yeni surume bakilip haber verilsin mi. Kurmak her zaman
+# kullanicinin elindedir (bildirimdeki ya da penceredeki Guncelle dugmesi).
+check_updates = true
 
 # Baglanan klasore yazma: yeni dosya, duzenleme, klasor olusturma. Buluttan
 # silme ve tasima her durumda kapalidir. false = salt okunur.

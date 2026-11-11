@@ -152,12 +152,27 @@ node_modules
 *.tmp
 ```
 
+## Updates
+
+kdlite checks GitHub for a new release once a day. When there is one, you
+get a notification and an *Update* button appears at the top of the window;
+it shows the new version, its release date and its release notes. Nothing is
+installed until you press *Update*. kdlite then downloads the release,
+checks its SHA-256 checksum, installs it and restarts itself once no sync is
+running. Your folders and settings are kept.
+
+To stop the checks, turn off *Tell me when a new version is out* in
+*Settings*. From the command line: `kdlite update` (or `kdlite update --check`
+to only look). Installs built from source are not updated; use `git pull` and
+`./install.sh`.
+
 ## Command line
 
 ```bash
 kdlite backup add ~/Documents   # sync a folder
 kdlite backup run               # sync now
 kdlite pause                    # pause syncing
+kdlite update                   # install a new version
 kdlite --help                   # everything else
 ```
 

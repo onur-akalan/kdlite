@@ -155,12 +155,27 @@ node_modules
 *.tmp
 ```
 
+## Güncellemeler
+
+kdlite günde bir kez GitHub'da yeni sürüm olup olmadığına bakar. Varsa bir
+bildirim gelir ve pencerenin üstünde *Güncelle* düğmesi çıkar; düğme yeni
+sürümü, çıkış tarihini ve sürüm notlarını gösterir. Sen *Güncelle*'ye
+basmadan hiçbir şey kurulmaz. Bastığında kdlite sürümü indirir, SHA-256
+sağlama toplamını denetler, kurar ve süren bir eşitleme yoksa kendini yeniden
+başlatır. Klasörlerin ve ayarların korunur.
+
+Bakmasını istemiyorsan *Ayarlar*'da *Yeni sürüm çıkınca haber ver*'i kapat.
+Komut satırından: `kdlite update` (yalnızca bakmak için `kdlite update
+--check`). Kaynak koddan kurulanlar güncellenmez; `git pull` ve
+`./install.sh` kullan.
+
 ## Komut satırı
 
 ```bash
 kdlite backup add ~/Documents   # bir klasörü eşitle
 kdlite backup run               # şimdi eşitle
 kdlite pause                    # eşitlemeyi duraklat
+kdlite update                   # yeni sürümü kur
 kdlite --help                   # diğer her şey
 ```
 

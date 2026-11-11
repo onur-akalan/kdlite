@@ -1,6 +1,6 @@
 [package]
 name = "kdlite"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 description = "Lightweight cloud drive client for Linux and KDE: on-demand FUSE mount, two-way folder sync, system tray. Supports Infomaniak kDrive."
 license = "MIT"
@@ -22,6 +22,7 @@ log = "0.4"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 tiny_http = "0.12"
 toml = "0.8"
 
